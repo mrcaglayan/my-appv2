@@ -70,6 +70,7 @@
     "test:ux:prux11": "node scripts/test-ux-prux11-counterparty-typeahead.js",
     "test:ux:prux12": "node scripts/test-ux-prux12-gl-account-lookup-and-breadcrumb.js",
     "test:ux:prux13a": "node scripts/test-ux-prux13a-inline-counterparty-create.js",
+    "test:ux:prux13b": "node scripts/test-ux-prux13b-inline-payment-term-create.js",
     "test:ux:prux14": "node scripts/test-ux-prux14-lifecycle-rules-and-status-timeline.js",
     "test:ux:prux15": "node scripts/test-ux-prux15-cari-documents-lifecycle-ui.js",
     "test:ux:prux16": "node scripts/test-ux-prux16-cash-lifecycle-ui.js",

@@ -62,6 +62,59 @@ function buildAccountLookupDescription(row) {
   return accountType || "";
 }
 
+function buildPaymentTermLookupLabel(row) {
+  const code = String(row?.code || "").trim();
+  const name = String(row?.name || "").trim();
+  if (code && name) {
+    return `${code} - ${name}`;
+  }
+  if (code || name) {
+    return code || name;
+  }
+  return String(row?.id || "-");
+}
+
+function buildPaymentTermLookupDescription(row) {
+  const parts = [];
+  const dueDays = Number(row?.dueDays ?? row?.due_days);
+  const graceDays = Number(row?.graceDays ?? row?.grace_days);
+  const isEndOfMonth = row?.isEndOfMonth === true || row?.is_end_of_month === true;
+  const status = String(row?.status || "ACTIVE").trim().toUpperCase();
+
+  if (Number.isFinite(dueDays) && dueDays >= 0) {
+    parts.push(`Due ${dueDays}d`);
+  }
+  if (Number.isFinite(graceDays) && graceDays > 0) {
+    parts.push(`Grace ${graceDays}d`);
+  }
+  if (isEndOfMonth) {
+    parts.push("EOM");
+  }
+  if (status === "INACTIVE") {
+    parts.push("INACTIVE");
+  }
+  return parts.join(" | ");
+}
+
+function withSelectedPaymentTermFallback(options, selectedId) {
+  const normalized = Array.isArray(options) ? [...options] : [];
+  const selected = String(selectedId || "").trim();
+  if (!selected) {
+    return normalized;
+  }
+  const exists = normalized.some((row) => String(row?.id || "") === selected);
+  if (exists) {
+    return normalized;
+  }
+  normalized.unshift({
+    id: selected,
+    code: `#${selected}`,
+    name: `Selected payment term #${selected}`,
+    status: "ACTIVE",
+  });
+  return normalized;
+}
+
 function withSelectedFallbackOption(options, selectedId, expectedType = "") {
   const normalized = Array.isArray(options) ? [...options] : [];
   const selected = String(selectedId || "").trim();
@@ -102,6 +155,13 @@ export default function CounterpartyForm({
   accountOptionsLoading = false,
   accountOptionsError = "",
   onAccountLookupQueryChange,
+  onPaymentTermLookupQueryChange,
+  canInlineCreatePaymentTerm = false,
+  inlineCreatePaymentTermLabel = "",
+  inlineCreatePaymentTermSaving = false,
+  onInlineCreatePaymentTerm,
+  inlineCreatePaymentTermError = "",
+  inlineCreatePaymentTermMessage = "",
   canReadGlAccounts = true,
   accountReadFallbackMessage = "",
   canSubmit = true,
@@ -122,11 +182,20 @@ export default function CounterpartyForm({
   const roleLabel = normalizeRoleLabel(form.isCustomer, form.isVendor);
   const legalEntityOptions = Array.isArray(legalEntities) ? legalEntities : [];
   const showLegalEntitySelect = legalEntityOptions.length > 0;
-  const paymentTermOptions = Array.isArray(paymentTerms) ? paymentTerms : [];
   const selectedPaymentTermId = String(form.defaultPaymentTermId || "");
-  const hasSelectedPaymentTerm = paymentTermOptions.some(
+  const rawPaymentTermOptions = Array.isArray(paymentTerms) ? paymentTerms : [];
+  const hasSelectedPaymentTerm = rawPaymentTermOptions.some(
     (row) => String(row.id) === selectedPaymentTermId
   );
+  const paymentTermOptions = withSelectedPaymentTermFallback(
+    rawPaymentTermOptions,
+    selectedPaymentTermId
+  );
+  const paymentTermLookupOptions = paymentTermOptions.map((row) => ({
+    value: String(row.id || ""),
+    label: buildPaymentTermLookupLabel(row),
+    description: buildPaymentTermLookupDescription(row),
+  }));
   const allAccountOptions = Array.isArray(accountOptions) ? accountOptions : [];
   const selectedArAccountId = String(form.arAccountId || "");
   const selectedApAccountId = String(form.apAccountId || "");
@@ -485,35 +554,65 @@ export default function CounterpartyForm({
           <label className="block text-xs font-semibold uppercase tracking-wide text-slate-600">
             Default Payment Term
           </label>
-          <select
-            className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+          <Combobox
+            className="mt-1"
             value={selectedPaymentTermId}
-            onChange={(event) => updateField("defaultPaymentTermId", event.target.value)}
+            options={paymentTermLookupOptions}
+            loading={paymentTermsLoading}
             disabled={submitting || !form.legalEntityId}
-          >
-            <option value="">No default payment term</option>
-            {selectedPaymentTermId && !hasSelectedPaymentTerm ? (
-              <option value={selectedPaymentTermId}>
-                Selected term #{selectedPaymentTermId}
-              </option>
-            ) : null}
-            {paymentTermOptions.map((row) => (
-              <option key={`payment-term-${row.id}`} value={String(row.id)}>
-                {row.code} - {row.name}
-                {row.status === "INACTIVE" ? " (INACTIVE)" : ""}
-              </option>
-            ))}
-          </select>
+            placeholder={
+              form.legalEntityId
+                ? "Search payment term code/name"
+                : "Select legal entity first"
+            }
+            noOptionsText={
+              form.legalEntityId
+                ? "No payment terms found."
+                : "Set legalEntityId to load payment terms."
+            }
+            onInputChange={(nextValue, meta) => {
+              if (typeof onPaymentTermLookupQueryChange === "function") {
+                onPaymentTermLookupQueryChange(nextValue, meta);
+              }
+            }}
+            onChange={(nextValue) =>
+              updateField("defaultPaymentTermId", nextValue ? String(nextValue) : "")
+            }
+          />
+          {canInlineCreatePaymentTerm ? (
+            <button
+              type="button"
+              className="mt-2 rounded-md border border-slate-300 bg-white px-2.5 py-1 text-[11px] font-semibold text-slate-700 disabled:opacity-60"
+              onClick={onInlineCreatePaymentTerm}
+              disabled={
+                inlineCreatePaymentTermSaving ||
+                submitting ||
+                typeof onInlineCreatePaymentTerm !== "function"
+              }
+            >
+              {inlineCreatePaymentTermSaving
+                ? "Creating payment term..."
+                : `Create "${inlineCreatePaymentTermLabel || "new payment term"}"`}
+            </button>
+          ) : null}
           {!form.legalEntityId ? (
             <p className="mt-1 text-xs text-slate-500">
               Select legal entity first.
             </p>
           ) : null}
-          {paymentTermsLoading ? (
-            <p className="mt-1 text-xs text-slate-500">Loading payment terms...</p>
-          ) : null}
           {paymentTermsError ? (
             <p className="mt-1 text-xs text-amber-700">{paymentTermsError}</p>
+          ) : null}
+          {inlineCreatePaymentTermError ? (
+            <p className="mt-1 text-xs text-rose-700">{inlineCreatePaymentTermError}</p>
+          ) : null}
+          {inlineCreatePaymentTermMessage ? (
+            <p className="mt-1 text-xs text-emerald-700">{inlineCreatePaymentTermMessage}</p>
+          ) : null}
+          {selectedPaymentTermId && !hasSelectedPaymentTerm ? (
+            <p className="mt-1 text-xs text-amber-700">
+              Selected payment term is not in current lookup scope.
+            </p>
           ) : null}
           <FieldError message={findFieldError(fieldErrors, "defaultPaymentTermId")} />
         </div>

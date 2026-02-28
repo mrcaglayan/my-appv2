@@ -31,7 +31,7 @@ Tag legend: `(hot: yes)` means likely touches conflict-prone files (`AppLayout.j
 - [x] PR-UX11 Counterparty typeahead in Cari Documents/Settlements (implemented: shared Combobox wired to Cari Documents filter/create/edit and Cari Settlements apply/bank-apply counterparty selectors, hot: no)
 - [x] PR-UX12 GL account lookup with searchable API (`q`) + breadcrumb display (implemented: `GET /api/v1/gl/accounts` now supports `q` + breadcrumb fields and Cari Counterparty/Cari Settlements account selectors use server-side q lookup with breadcrumb descriptions, hot: no)
 - [x] PR-UX13-A Inline counterparty create from lookups (implemented: inline create action from typed Combobox input in Cari Documents create/edit and Cari Settlements apply/bank-apply lookups; creates counterparty, refreshes local lookup options, auto-selects new `counterpartyId`, hot: no)
-- [ ] PR-UX13-B Inline payment term create (backend write endpoint now available via `POST /api/v1/cari/payment-terms`; inline create UX not started)
+- [x] PR-UX13-B Inline payment term create (implemented: inline create action from typed payment-term lookup text in Counterparty create/edit forms; creates payment term via `POST /api/v1/cari/payment-terms`, refreshes options, auto-selects `defaultPaymentTermId`, hot: no)
 
 - [x] PR-UX14 Shared lifecycle rules + `StatusTimeline` component (implemented: reusable lifecycle rule registry + transition helpers in `frontend/src/lifecycle/lifecycleRules.js` and generic `frontend/src/components/StatusTimeline.jsx` for timeline rendering, hot: no)
 - [x] PR-UX15 Apply lifecycle UI to Cari Documents (implemented: detail panel now renders lifecycle snapshot + shared `StatusTimeline` built from document status/timestamps via shared lifecycle rules helpers, hot: no)
@@ -115,6 +115,8 @@ Intentional not-yet-implemented placeholders (Stock, Fixed Assets, generic Repor
   smoke: `backend/scripts/test-ux-prux12-gl-account-lookup-and-breadcrumb.js`
 - [x] PR-UX13-A acceptance: users with `cari.card.upsert` can create counterparties inline from lookup text and continue flow with the new card auto-selected
   smoke: `backend/scripts/test-ux-prux13a-inline-counterparty-create.js`
+- [x] PR-UX13-B acceptance: users with `cari.card.upsert` can create payment terms inline from counterparty payment-term lookup text and continue flow with the new term auto-selected
+  smoke: `backend/scripts/test-ux-prux13b-inline-payment-term-create.js`
 - [x] PR-UX14 acceptance: shared lifecycle utilities expose canonical statuses/transitions and `StatusTimeline` renders ordered current/done/upcoming states for module reuse
   smoke: `backend/scripts/test-ux-prux14-lifecycle-rules-and-status-timeline.js`
 - [x] PR-UX15 acceptance: Cari Documents detail view shows lifecycle snapshot + timeline derived from shared rules/events and surfaces next allowed transitions for current status
@@ -127,5 +129,5 @@ Intentional not-yet-implemented placeholders (Stock, Fixed Assets, generic Repor
   smoke: `backend/scripts/test-ux-prcore01-pagination-contracts.js` (to add)
 
 ## Immediate Next Step
-- Proceed with `PR-UX13-B` (now unblocked).
+- Proceed with `PR-UX17`.
 - After each merged PR, update this tracker line from `[ ]` to `[x]` with a short `(implemented)` note.

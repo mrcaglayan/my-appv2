@@ -6,7 +6,10 @@ import {
   updateCariCounterparty,
 } from "../../api/cariCounterparty.js";
 import { listAccounts } from "../../api/glAdmin.js";
-import { listCariPaymentTerms } from "../../api/cariPaymentTerms.js";
+import {
+  createCariPaymentTerm,
+  listCariPaymentTerms,
+} from "../../api/cariPaymentTerms.js";
 import { listLegalEntities } from "../../api/orgAdmin.js";
 import { useAuth } from "../../auth/useAuth.js";
 import CounterpartyForm from "./CounterpartyForm.jsx";
@@ -111,6 +114,28 @@ function normalizeLookupQuery(value) {
   return String(value || "").trim();
 }
 
+function buildInlinePaymentTermCode({ legalEntityId, name }) {
+  const normalizedName = normalizeLookupQuery(name)
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, "")
+    .slice(0, 18);
+  const suffix = globalThis.crypto?.randomUUID
+    ? globalThis.crypto.randomUUID().replace(/-/g, "").slice(0, 6).toUpperCase()
+    : Math.random().toString(36).slice(2, 8).toUpperCase();
+  const base = normalizedName || "TERM";
+  return `PT-${legalEntityId}-${base}-${suffix}`.slice(0, 50);
+}
+
+function prependOrReplacePaymentTermOption(options, row) {
+  const nextRowId = Number(row?.id || 0);
+  if (!nextRowId) {
+    return Array.isArray(options) ? [...options] : [];
+  }
+  const existing = Array.isArray(options) ? options : [];
+  const filtered = existing.filter((item) => Number(item?.id || 0) !== nextRowId);
+  return [row, ...filtered];
+}
+
 function mapPaymentTermRows(response) {
   if (!Array.isArray(response?.rows)) {
     return [];
@@ -119,6 +144,9 @@ function mapPaymentTermRows(response) {
     id: Number(row?.id || 0),
     code: String(row?.code || ""),
     name: String(row?.name || ""),
+    dueDays: Number(row?.dueDays ?? row?.due_days ?? 0),
+    graceDays: Number(row?.graceDays ?? row?.grace_days ?? 0),
+    isEndOfMonth: Boolean(row?.isEndOfMonth ?? row?.is_end_of_month),
     status: String(row?.status || "ACTIVE").toUpperCase(),
   }));
 }
@@ -171,6 +199,10 @@ export default function CariCounterpartyPage({ pageKey = "buyerList" }) {
   const [createPaymentTerms, setCreatePaymentTerms] = useState([]);
   const [createPaymentTermsLoading, setCreatePaymentTermsLoading] = useState(false);
   const [createPaymentTermsError, setCreatePaymentTermsError] = useState("");
+  const [createPaymentTermLookupQuery, setCreatePaymentTermLookupQuery] = useState("");
+  const [createInlinePaymentTermSaving, setCreateInlinePaymentTermSaving] = useState(false);
+  const [createInlinePaymentTermError, setCreateInlinePaymentTermError] = useState("");
+  const [createInlinePaymentTermMessage, setCreateInlinePaymentTermMessage] = useState("");
   const [createAccountOptions, setCreateAccountOptions] = useState([]);
   const [createAccountsLoading, setCreateAccountsLoading] = useState(false);
   const [createAccountsError, setCreateAccountsError] = useState("");
@@ -195,6 +227,10 @@ export default function CariCounterpartyPage({ pageKey = "buyerList" }) {
   const [editPaymentTerms, setEditPaymentTerms] = useState([]);
   const [editPaymentTermsLoading, setEditPaymentTermsLoading] = useState(false);
   const [editPaymentTermsError, setEditPaymentTermsError] = useState("");
+  const [editPaymentTermLookupQuery, setEditPaymentTermLookupQuery] = useState("");
+  const [editInlinePaymentTermSaving, setEditInlinePaymentTermSaving] = useState(false);
+  const [editInlinePaymentTermError, setEditInlinePaymentTermError] = useState("");
+  const [editInlinePaymentTermMessage, setEditInlinePaymentTermMessage] = useState("");
   const [editAccountOptions, setEditAccountOptions] = useState([]);
   const [editAccountsLoading, setEditAccountsLoading] = useState(false);
   const [editAccountsError, setEditAccountsError] = useState("");
@@ -222,11 +258,19 @@ export default function CariCounterpartyPage({ pageKey = "buyerList" }) {
     setEditMessage("");
     setCreatePaymentTerms([]);
     setCreatePaymentTermsError("");
+    setCreatePaymentTermLookupQuery("");
+    setCreateInlinePaymentTermSaving(false);
+    setCreateInlinePaymentTermError("");
+    setCreateInlinePaymentTermMessage("");
     setCreateAccountOptions([]);
     setCreateAccountsError("");
     setCreateAccountLookupQuery("");
     setEditPaymentTerms([]);
     setEditPaymentTermsError("");
+    setEditPaymentTermLookupQuery("");
+    setEditInlinePaymentTermSaving(false);
+    setEditInlinePaymentTermError("");
+    setEditInlinePaymentTermMessage("");
     setEditAccountOptions([]);
     setEditAccountsError("");
     setEditAccountLookupQuery("");
@@ -292,14 +336,26 @@ export default function CariCounterpartyPage({ pageKey = "buyerList" }) {
     if (!isCreatePage) {
       return;
     }
+    setCreatePaymentTermLookupQuery("");
+    setCreateInlinePaymentTermSaving(false);
+    setCreateInlinePaymentTermError("");
+    setCreateInlinePaymentTermMessage("");
     setCreateAccountLookupQuery("");
   }, [isCreatePage, createForm.legalEntityId]);
 
   useEffect(() => {
     if (!editingId) {
+      setEditPaymentTermLookupQuery("");
+      setEditInlinePaymentTermSaving(false);
+      setEditInlinePaymentTermError("");
+      setEditInlinePaymentTermMessage("");
       setEditAccountLookupQuery("");
       return;
     }
+    setEditPaymentTermLookupQuery("");
+    setEditInlinePaymentTermSaving(false);
+    setEditInlinePaymentTermError("");
+    setEditInlinePaymentTermMessage("");
     setEditAccountLookupQuery("");
   }, [editingId, editingForm.legalEntityId]);
 
@@ -315,6 +371,7 @@ export default function CariCounterpartyPage({ pageKey = "buyerList" }) {
 
       await loadPaymentTermsForLegalEntity({
         legalEntityId: createForm.legalEntityId,
+        queryText: createPaymentTermLookupQuery,
         setRows: (rows) => {
           if (!cancelled) {
             setCreatePaymentTerms(rows);
@@ -338,7 +395,7 @@ export default function CariCounterpartyPage({ pageKey = "buyerList" }) {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isCreatePage, createForm.legalEntityId, canRead]);
+  }, [isCreatePage, createForm.legalEntityId, createPaymentTermLookupQuery, canRead]);
 
   useEffect(() => {
     let cancelled = false;
@@ -398,6 +455,7 @@ export default function CariCounterpartyPage({ pageKey = "buyerList" }) {
 
       await loadPaymentTermsForLegalEntity({
         legalEntityId: editingForm.legalEntityId,
+        queryText: editPaymentTermLookupQuery,
         setRows: (rows) => {
           if (!cancelled) {
             setEditPaymentTerms(rows);
@@ -421,7 +479,7 @@ export default function CariCounterpartyPage({ pageKey = "buyerList" }) {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [editingId, editingForm.legalEntityId, canRead]);
+  }, [editingId, editingForm.legalEntityId, editPaymentTermLookupQuery, canRead]);
 
   useEffect(() => {
     let cancelled = false;
@@ -493,6 +551,7 @@ export default function CariCounterpartyPage({ pageKey = "buyerList" }) {
 
   async function loadPaymentTermsForLegalEntity({
     legalEntityId,
+    queryText,
     setRows,
     setLoading,
     setError,
@@ -508,8 +567,10 @@ export default function CariCounterpartyPage({ pageKey = "buyerList" }) {
     setLoading(true);
     setError("");
     try {
+      const normalizedQuery = normalizeLookupQuery(queryText);
       const response = await listCariPaymentTerms({
         legalEntityId: parsedLegalEntityId,
+        q: normalizedQuery || undefined,
         limit: 300,
         offset: 0,
       });
@@ -588,6 +649,9 @@ export default function CariCounterpartyPage({ pageKey = "buyerList" }) {
           legalEntityId: prev.legalEntityId || reset.legalEntityId,
         };
       });
+      setCreatePaymentTermLookupQuery("");
+      setCreateInlinePaymentTermError("");
+      setCreateInlinePaymentTermMessage("");
     } catch (err) {
       setCreateError(mapCounterpartyApiError(err, "Failed to create counterparty."));
     } finally {
@@ -599,6 +663,10 @@ export default function CariCounterpartyPage({ pageKey = "buyerList" }) {
     if (!canUpsert) {
       return;
     }
+    setEditPaymentTermLookupQuery("");
+    setEditInlinePaymentTermSaving(false);
+    setEditInlinePaymentTermError("");
+    setEditInlinePaymentTermMessage("");
     setEditAccountLookupQuery("");
     setEditLoading(true);
     setEditError("");
@@ -643,6 +711,17 @@ export default function CariCounterpartyPage({ pageKey = "buyerList" }) {
     setCreateAccountLookupQuery(normalizeLookupQuery(nextValue));
   }
 
+  function handleCreatePaymentTermLookupInput(nextValue, meta = {}) {
+    const reason = String(meta?.reason || "").trim().toLowerCase();
+    if (reason === "select" || reason === "clear") {
+      setCreatePaymentTermLookupQuery("");
+      return;
+    }
+    setCreateInlinePaymentTermError("");
+    setCreateInlinePaymentTermMessage("");
+    setCreatePaymentTermLookupQuery(normalizeLookupQuery(nextValue));
+  }
+
   function handleEditAccountLookupInput(nextValue, meta = {}) {
     const reason = String(meta?.reason || "").trim().toLowerCase();
     if (reason === "select" || reason === "clear") {
@@ -651,6 +730,115 @@ export default function CariCounterpartyPage({ pageKey = "buyerList" }) {
     }
     setEditAccountLookupQuery(normalizeLookupQuery(nextValue));
   }
+
+  function handleEditPaymentTermLookupInput(nextValue, meta = {}) {
+    const reason = String(meta?.reason || "").trim().toLowerCase();
+    if (reason === "select" || reason === "clear") {
+      setEditPaymentTermLookupQuery("");
+      return;
+    }
+    setEditInlinePaymentTermError("");
+    setEditInlinePaymentTermMessage("");
+    setEditPaymentTermLookupQuery(normalizeLookupQuery(nextValue));
+  }
+
+  async function runInlinePaymentTermCreate({
+    legalEntityId,
+    lookupName,
+    setSaving,
+    setError,
+    setMessage,
+    setLookupQuery,
+    setForm,
+    setOptions,
+  }) {
+    if (!canUpsert) {
+      return;
+    }
+
+    const parsedLegalEntityId = toPositiveInt(legalEntityId);
+    const normalizedName = normalizeLookupQuery(lookupName);
+    if (!parsedLegalEntityId) {
+      setError("Select legal entity first.");
+      return;
+    }
+    if (!normalizedName) {
+      setError("Type payment term name first.");
+      return;
+    }
+
+    setSaving(true);
+    setError("");
+    setMessage("");
+    try {
+      const response = await createCariPaymentTerm({
+        legalEntityId: parsedLegalEntityId,
+        code: buildInlinePaymentTermCode({
+          legalEntityId: parsedLegalEntityId,
+          name: normalizedName,
+        }),
+        name: normalizedName,
+        dueDays: 0,
+        graceDays: 0,
+        isEndOfMonth: false,
+        status: "ACTIVE",
+      });
+      const createdRows = mapPaymentTermRows({ rows: [response?.row || null] });
+      const createdRow = createdRows[0] || null;
+      if (!createdRow?.id) {
+        throw new Error("Payment term create response missing row id.");
+      }
+      setOptions((prev) => prependOrReplacePaymentTermOption(prev, createdRow));
+      setForm((prev) => ({
+        ...prev,
+        defaultPaymentTermId: String(createdRow.id),
+      }));
+      setLookupQuery("");
+      setMessage(`Payment term created: ${createdRow.code || "-"} - ${createdRow.name || "-"}`);
+    } catch (err) {
+      setError(mapCounterpartyApiError(err, "Failed to create payment term."));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleInlineCreatePaymentTermForCreateForm() {
+    await runInlinePaymentTermCreate({
+      legalEntityId: createForm.legalEntityId,
+      lookupName: createPaymentTermLookupQuery,
+      setSaving: setCreateInlinePaymentTermSaving,
+      setError: setCreateInlinePaymentTermError,
+      setMessage: setCreateInlinePaymentTermMessage,
+      setLookupQuery: setCreatePaymentTermLookupQuery,
+      setForm: setCreateForm,
+      setOptions: setCreatePaymentTerms,
+    });
+  }
+
+  async function handleInlineCreatePaymentTermForEditForm() {
+    await runInlinePaymentTermCreate({
+      legalEntityId: editingForm.legalEntityId,
+      lookupName: editPaymentTermLookupQuery,
+      setSaving: setEditInlinePaymentTermSaving,
+      setError: setEditInlinePaymentTermError,
+      setMessage: setEditInlinePaymentTermMessage,
+      setLookupQuery: setEditPaymentTermLookupQuery,
+      setForm: setEditingForm,
+      setOptions: setEditPaymentTerms,
+    });
+  }
+
+  const createInlinePaymentTermName = normalizeLookupQuery(createPaymentTermLookupQuery);
+  const editInlinePaymentTermName = normalizeLookupQuery(editPaymentTermLookupQuery);
+  const canInlineCreatePaymentTermInCreateForm =
+    canUpsert &&
+    Boolean(toPositiveInt(createForm.legalEntityId)) &&
+    Boolean(createInlinePaymentTermName);
+  const canInlineCreatePaymentTermInEditForm =
+    canUpsert &&
+    Boolean(editingId) &&
+    Boolean(toPositiveInt(editingForm.legalEntityId)) &&
+    Boolean(editInlinePaymentTermName);
 
   function renderCreatePage() {
     return (
@@ -666,6 +854,13 @@ export default function CariCounterpartyPage({ pageKey = "buyerList" }) {
         paymentTerms={createPaymentTerms}
         paymentTermsLoading={createPaymentTermsLoading}
         paymentTermsError={createPaymentTermsError}
+        onPaymentTermLookupQueryChange={handleCreatePaymentTermLookupInput}
+        canInlineCreatePaymentTerm={canInlineCreatePaymentTermInCreateForm}
+        inlineCreatePaymentTermLabel={createInlinePaymentTermName}
+        inlineCreatePaymentTermSaving={createInlinePaymentTermSaving}
+        onInlineCreatePaymentTerm={handleInlineCreatePaymentTermForCreateForm}
+        inlineCreatePaymentTermError={createInlinePaymentTermError}
+        inlineCreatePaymentTermMessage={createInlinePaymentTermMessage}
         accountOptions={createAccountOptions}
         accountOptionsLoading={createAccountsLoading}
         accountOptionsError={createAccountsError}
@@ -679,6 +874,10 @@ export default function CariCounterpartyPage({ pageKey = "buyerList" }) {
         onSubmit={handleCreateSubmit}
         onReset={() => {
           setCreateForm(buildInitialCounterpartyForm(config.roleDefault));
+          setCreatePaymentTermLookupQuery("");
+          setCreateInlinePaymentTermSaving(false);
+          setCreateInlinePaymentTermError("");
+          setCreateInlinePaymentTermMessage("");
           setCreateAccountLookupQuery("");
         }}
         submitLabel="Create Card"
@@ -1008,6 +1207,13 @@ export default function CariCounterpartyPage({ pageKey = "buyerList" }) {
             paymentTerms={editPaymentTerms}
             paymentTermsLoading={editPaymentTermsLoading}
             paymentTermsError={editPaymentTermsError}
+            onPaymentTermLookupQueryChange={handleEditPaymentTermLookupInput}
+            canInlineCreatePaymentTerm={canInlineCreatePaymentTermInEditForm}
+            inlineCreatePaymentTermLabel={editInlinePaymentTermName}
+            inlineCreatePaymentTermSaving={editInlinePaymentTermSaving}
+            onInlineCreatePaymentTerm={handleInlineCreatePaymentTermForEditForm}
+            inlineCreatePaymentTermError={editInlinePaymentTermError}
+            inlineCreatePaymentTermMessage={editInlinePaymentTermMessage}
             accountOptions={editAccountOptions}
             accountOptionsLoading={editAccountsLoading}
             accountOptionsError={editAccountsError}
@@ -1023,6 +1229,10 @@ export default function CariCounterpartyPage({ pageKey = "buyerList" }) {
               setEditingId(null);
               setEditError("");
               setEditMessage("");
+              setEditPaymentTermLookupQuery("");
+              setEditInlinePaymentTermSaving(false);
+              setEditInlinePaymentTermError("");
+              setEditInlinePaymentTermMessage("");
               setEditAccountLookupQuery("");
             }}
             submitLabel="Save Changes"
