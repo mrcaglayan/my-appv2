@@ -29,7 +29,7 @@ Tag legend: `(hot: yes)` means likely touches conflict-prone files (`AppLayout.j
 
 - [x] PR-UX10 Shared `Combobox` component (new `frontend/src/components`) (implemented: reusable accessible combobox with keyboard nav + loading/empty states + custom option rendering, hot: no)
 - [x] PR-UX11 Counterparty typeahead in Cari Documents/Settlements (implemented: shared Combobox wired to Cari Documents filter/create/edit and Cari Settlements apply/bank-apply counterparty selectors, hot: no)
-- [ ] PR-UX12 GL account lookup with searchable API (`q`) + breadcrumb display (not started)
+- [x] PR-UX12 GL account lookup with searchable API (`q`) + breadcrumb display (implemented: `GET /api/v1/gl/accounts` now supports `q` + breadcrumb fields and Cari Counterparty/Cari Settlements account selectors use server-side q lookup with breadcrumb descriptions, hot: no)
 - [ ] PR-UX13-A Inline counterparty create from lookups (API exists; not started)
 - [ ] PR-UX13-B Inline payment term create (backend write endpoint required first) (blocked)
 
@@ -110,11 +110,13 @@ Intentional not-yet-implemented placeholders (Stock, Fixed Assets, generic Repor
   smoke: `backend/scripts/test-ux-prux10-shared-combobox.js`
 - [x] PR-UX11 acceptance: Cari Documents and Cari Settlements expose counterparty lookup typeahead controls that drive `counterpartyId` form/filter fields
   smoke: `backend/scripts/test-ux-prux11-counterparty-typeahead.js`
+- [x] PR-UX12 acceptance: GL account lookups support backend `q` search and show breadcrumb paths in Cari account selector UIs
+  smoke: `backend/scripts/test-ux-prux12-gl-account-lookup-and-breadcrumb.js`
 - [x] PR-CORE05 acceptance: standardized user-facing error handling + copyable requestId/details
   smoke: `backend/scripts/test-ux-prcore05-error-envelope.js`
 - [x] PR-CORE01 acceptance: key list endpoints return consistent `rows + total + limit + offset` with `pagination` metadata
   smoke: `backend/scripts/test-ux-prcore01-pagination-contracts.js` (to add)
 
 ## Immediate Next Step
-- Continue with `PR-UX12`.
+- Continue with `PR-UX13-A`.
 - After each merged PR, update this tracker line from `[ ]` to `[x]` with a short `(implemented)` note.

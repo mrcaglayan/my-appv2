@@ -11,6 +11,77 @@ import {
   resolveTenantId,
 } from "./_utils.js";
 
+function normalizeSearchText(value, maxLength = 120) {
+  const text = String(value || "").trim();
+  return text ? text.slice(0, maxLength) : "";
+}
+
+function buildAccountBreadcrumbResolver(hierarchyRows = []) {
+  const accountMap = new Map();
+  for (const row of hierarchyRows || []) {
+    const id = parsePositiveInt(row?.id);
+    if (!id) {
+      continue;
+    }
+    accountMap.set(id, {
+      id,
+      parentAccountId: parsePositiveInt(row?.parent_account_id),
+      code: String(row?.code || "").trim(),
+      name: String(row?.name || "").trim(),
+    });
+  }
+
+  const cache = new Map();
+  return (accountIdRaw) => {
+    const accountId = parsePositiveInt(accountIdRaw);
+    if (!accountId) {
+      return {
+        label: null,
+        codes: null,
+        names: null,
+      };
+    }
+    if (cache.has(accountId)) {
+      return cache.get(accountId);
+    }
+
+    const visited = new Set();
+    const chain = [];
+    let cursor = accountId;
+    while (cursor && !visited.has(cursor)) {
+      visited.add(cursor);
+      const account = accountMap.get(cursor);
+      if (!account) {
+        break;
+      }
+      chain.push(account);
+      cursor = parsePositiveInt(account.parentAccountId);
+    }
+    chain.reverse();
+
+    const codeSegments = chain.map((row) => String(row.code || "").trim()).filter(Boolean);
+    const nameSegments = chain.map((row) => String(row.name || "").trim()).filter(Boolean);
+    const labelSegments = chain
+      .map((row) => {
+        const code = String(row.code || "").trim();
+        const name = String(row.name || "").trim();
+        if (code && name) {
+          return `${code} - ${name}`;
+        }
+        return code || name || null;
+      })
+      .filter(Boolean);
+
+    const resolved = {
+      label: labelSegments.length > 0 ? labelSegments.join(" > ") : null,
+      codes: codeSegments.length > 0 ? codeSegments.join(" > ") : null,
+      names: nameSegments.length > 0 ? nameSegments.join(" > ") : null,
+    };
+    cache.set(accountId, resolved);
+    return resolved;
+  };
+}
+
 export function registerGlReadCoreRoutes(router) {
   router.get(
     "/books",
@@ -119,6 +190,12 @@ export function registerGlReadCoreRoutes(router) {
       const legalEntityId = parsePositiveInt(req.query.legalEntityId);
       const includeInactive =
         String(req.query.includeInactive || "").toLowerCase() === "true";
+      const q = normalizeSearchText(req.query.q);
+      const limitRaw = Number(req.query.limit);
+      const limit =
+        Number.isInteger(limitRaw) && limitRaw > 0 ? Math.min(limitRaw, 1000) : null;
+      const offsetRaw = Number(req.query.offset);
+      const offset = Number.isInteger(offsetRaw) && offsetRaw >= 0 ? offsetRaw : 0;
 
       if (legalEntityId) {
         assertScopeAccess(req, "legal_entity", legalEntityId, "legalEntityId");
@@ -144,6 +221,12 @@ export function registerGlReadCoreRoutes(router) {
       if (!includeInactive) {
         conditions.push("a.is_active = TRUE");
       }
+      if (q) {
+        conditions.push("(a.code LIKE ? OR a.name LIKE ?)");
+        params.push(`%${q}%`, `%${q}%`);
+      }
+
+      const limitSql = limit ? ` LIMIT ${limit} OFFSET ${offset}` : "";
 
       const result = await query(
         `SELECT
@@ -153,11 +236,52 @@ export function registerGlReadCoreRoutes(router) {
          FROM accounts a
          JOIN charts_of_accounts c ON c.id = a.coa_id
          WHERE ${conditions.join(" AND ")}
-         ORDER BY c.id, a.code`,
+         ORDER BY c.id, a.code${limitSql}`,
         params
       );
 
-      return res.json({ tenantId, rows: result.rows });
+      const rows = Array.isArray(result.rows) ? result.rows : [];
+      if (rows.length > 0) {
+        const hierarchyConditions = ["c.tenant_id = ?"];
+        const hierarchyParams = [tenantId];
+        const hierarchyScopeFilter = buildScopeFilter(
+          req,
+          "legal_entity",
+          "c.legal_entity_id",
+          hierarchyParams
+        );
+        hierarchyConditions.push(`(c.legal_entity_id IS NULL OR ${hierarchyScopeFilter})`);
+        if (coaId) {
+          hierarchyConditions.push("a.coa_id = ?");
+          hierarchyParams.push(coaId);
+        }
+        if (legalEntityId) {
+          hierarchyConditions.push("c.legal_entity_id = ?");
+          hierarchyParams.push(legalEntityId);
+        }
+
+        const hierarchyResult = await query(
+          `SELECT
+             a.id,
+             a.parent_account_id,
+             a.code,
+             a.name
+           FROM accounts a
+           JOIN charts_of_accounts c ON c.id = a.coa_id
+           WHERE ${hierarchyConditions.join(" AND ")}`,
+          hierarchyParams
+        );
+
+        const resolveBreadcrumb = buildAccountBreadcrumbResolver(hierarchyResult.rows || []);
+        for (const row of rows) {
+          const breadcrumb = resolveBreadcrumb(row?.id);
+          row.account_breadcrumb = breadcrumb.label;
+          row.account_breadcrumb_codes = breadcrumb.codes;
+          row.account_breadcrumb_names = breadcrumb.names;
+        }
+      }
+
+      return res.json({ tenantId, rows });
     })
   );
 }

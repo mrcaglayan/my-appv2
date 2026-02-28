@@ -1,4 +1,5 @@
 import { useState } from "react";
+import Combobox from "../../components/Combobox.jsx";
 import {
   ADDRESS_STATUSES,
   ADDRESS_TYPES,
@@ -38,6 +39,53 @@ function normalizeRoleLabel(isCustomer, isVendor) {
   return "None";
 }
 
+function buildAccountLookupLabel(row) {
+  const code = String(row?.code || "").trim();
+  const name = String(row?.name || "").trim();
+  if (code && name) {
+    return `${code} - ${name}`;
+  }
+  if (code || name) {
+    return code || name;
+  }
+  return String(row?.id || "-");
+}
+
+function buildAccountLookupDescription(row) {
+  const breadcrumb = String(
+    row?.breadcrumb || row?.breadcrumbCodes || row?.breadcrumbNames || ""
+  ).trim();
+  if (breadcrumb) {
+    return breadcrumb;
+  }
+  const accountType = String(row?.accountType || "").trim().toUpperCase();
+  return accountType || "";
+}
+
+function withSelectedFallbackOption(options, selectedId, expectedType = "") {
+  const normalized = Array.isArray(options) ? [...options] : [];
+  const selected = String(selectedId || "").trim();
+  if (!selected) {
+    return normalized;
+  }
+  const exists = normalized.some((row) => String(row?.id || "") === selected);
+  if (exists) {
+    return normalized;
+  }
+  normalized.unshift({
+    id: selected,
+    code: `#${selected}`,
+    name: `Selected account #${selected}`,
+    accountType: expectedType,
+    allowPosting: true,
+    isActive: true,
+    breadcrumb: "",
+    breadcrumbCodes: "",
+    breadcrumbNames: "",
+  });
+  return normalized;
+}
+
 export default function CounterpartyForm({
   title,
   description,
@@ -53,6 +101,7 @@ export default function CounterpartyForm({
   accountOptions = [],
   accountOptionsLoading = false,
   accountOptionsError = "",
+  onAccountLookupQueryChange,
   canReadGlAccounts = true,
   accountReadFallbackMessage = "",
   canSubmit = true,
@@ -79,20 +128,28 @@ export default function CounterpartyForm({
     (row) => String(row.id) === selectedPaymentTermId
   );
   const allAccountOptions = Array.isArray(accountOptions) ? accountOptions : [];
-  const arAccountOptions = allAccountOptions.filter(
-    (row) => String(row.accountType || "").toUpperCase() === "ASSET"
-  );
-  const apAccountOptions = allAccountOptions.filter(
-    (row) => String(row.accountType || "").toUpperCase() === "LIABILITY"
-  );
   const selectedArAccountId = String(form.arAccountId || "");
   const selectedApAccountId = String(form.apAccountId || "");
-  const hasSelectedArAccount = arAccountOptions.some(
-    (row) => String(row.id) === selectedArAccountId
+  const arAccountOptions = withSelectedFallbackOption(
+    allAccountOptions.filter((row) => String(row.accountType || "").toUpperCase() === "ASSET"),
+    selectedArAccountId,
+    "ASSET"
   );
-  const hasSelectedApAccount = apAccountOptions.some(
-    (row) => String(row.id) === selectedApAccountId
+  const apAccountOptions = withSelectedFallbackOption(
+    allAccountOptions.filter((row) => String(row.accountType || "").toUpperCase() === "LIABILITY"),
+    selectedApAccountId,
+    "LIABILITY"
   );
+  const arAccountLookupOptions = arAccountOptions.map((row) => ({
+    value: String(row.id || ""),
+    label: buildAccountLookupLabel(row),
+    description: buildAccountLookupDescription(row),
+  }));
+  const apAccountLookupOptions = apAccountOptions.map((row) => ({
+    value: String(row.id || ""),
+    label: buildAccountLookupLabel(row),
+    description: buildAccountLookupDescription(row),
+  }));
 
   function updateField(field, value) {
     setForm((prev) => ({ ...prev, [field]: value }));
@@ -467,24 +524,32 @@ export default function CounterpartyForm({
           </label>
           {canReadGlAccounts ? (
             <>
-              <select
-                className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+              <Combobox
+                className="mt-1"
                 value={selectedArAccountId}
-                onChange={(event) => updateField("arAccountId", event.target.value)}
+                options={arAccountLookupOptions}
+                loading={accountOptionsLoading}
+                filterOptions={false}
+                placeholder={
+                  form.legalEntityId
+                    ? "Search AR account code/name"
+                    : "Select legal entity first"
+                }
+                noOptionsText={
+                  form.legalEntityId
+                    ? "No AR accounts found. Type to refine search."
+                    : "Set legalEntityId to load AR accounts."
+                }
+                onInputChange={(nextValue, meta) => {
+                  if (typeof onAccountLookupQueryChange === "function") {
+                    onAccountLookupQueryChange(nextValue, meta);
+                  }
+                }}
+                onChange={(nextValue) =>
+                  updateField("arAccountId", nextValue ? String(nextValue) : "")
+                }
                 disabled={submitting || !form.legalEntityId || !form.isCustomer}
-              >
-                <option value="">No AR override</option>
-                {selectedArAccountId && !hasSelectedArAccount ? (
-                  <option value={selectedArAccountId}>
-                    Selected account #{selectedArAccountId}
-                  </option>
-                ) : null}
-                {arAccountOptions.map((row) => (
-                  <option key={`ar-account-${row.id}`} value={String(row.id)}>
-                    {row.code} - {row.name}
-                  </option>
-                ))}
-              </select>
+              />
               {!form.isCustomer ? (
                 <p className="mt-1 text-xs text-slate-500">
                   Enable Customer role to set AR mapping.
@@ -511,24 +576,32 @@ export default function CounterpartyForm({
           </label>
           {canReadGlAccounts ? (
             <>
-              <select
-                className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+              <Combobox
+                className="mt-1"
                 value={selectedApAccountId}
-                onChange={(event) => updateField("apAccountId", event.target.value)}
+                options={apAccountLookupOptions}
+                loading={accountOptionsLoading}
+                filterOptions={false}
+                placeholder={
+                  form.legalEntityId
+                    ? "Search AP account code/name"
+                    : "Select legal entity first"
+                }
+                noOptionsText={
+                  form.legalEntityId
+                    ? "No AP accounts found. Type to refine search."
+                    : "Set legalEntityId to load AP accounts."
+                }
+                onInputChange={(nextValue, meta) => {
+                  if (typeof onAccountLookupQueryChange === "function") {
+                    onAccountLookupQueryChange(nextValue, meta);
+                  }
+                }}
+                onChange={(nextValue) =>
+                  updateField("apAccountId", nextValue ? String(nextValue) : "")
+                }
                 disabled={submitting || !form.legalEntityId || !form.isVendor}
-              >
-                <option value="">No AP override</option>
-                {selectedApAccountId && !hasSelectedApAccount ? (
-                  <option value={selectedApAccountId}>
-                    Selected account #{selectedApAccountId}
-                  </option>
-                ) : null}
-                {apAccountOptions.map((row) => (
-                  <option key={`ap-account-${row.id}`} value={String(row.id)}>
-                    {row.code} - {row.name}
-                  </option>
-                ))}
-              </select>
+              />
               {!form.isVendor ? (
                 <p className="mt-1 text-xs text-slate-500">
                   Enable Vendor role to set AP mapping.

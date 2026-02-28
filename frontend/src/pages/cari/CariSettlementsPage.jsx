@@ -75,6 +75,38 @@ function mapCounterpartyLookupOption(row) {
   };
 }
 
+function normalizeLookupQuery(value) {
+  return String(value || "").trim();
+}
+
+function mapGlAccountLookupOption(row) {
+  const id = toPositiveInt(row?.id);
+  const code = String(row?.code || id || "").trim();
+  const name = String(row?.name || "").trim();
+  const breadcrumb = String(
+    row?.account_breadcrumb || row?.accountBreadcrumb || row?.breadcrumb || ""
+  ).trim();
+  return {
+    value: id ? String(id) : "",
+    label: name ? `${code || id} - ${name}` : String(code || id || "-"),
+    description: breadcrumb || "",
+  };
+}
+
+function isActivePostingAccount(row, legalEntityId = null) {
+  if (!row) {
+    return false;
+  }
+  const rowLegalEntityId = toPositiveInt(row.legal_entity_id || row.legalEntityId);
+  if (legalEntityId && rowLegalEntityId && rowLegalEntityId !== legalEntityId) {
+    return false;
+  }
+  const allowPosting =
+    row.allow_posting === 1 || row.allowPosting === true || row.allow_posting === true;
+  const isActive = row.is_active === 1 || row.isActive === true || row.is_active === true;
+  return allowPosting && isActive;
+}
+
 function toPositiveDecimal(value) {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
@@ -303,7 +335,10 @@ export default function CariSettlementsPage() {
   const [lookupWarning, setLookupWarning] = useState("");
   const [cashRegisterOptions, setCashRegisterOptions] = useState([]);
   const [openCashSessions, setOpenCashSessions] = useState([]);
-  const [cashAccountOptions, setCashAccountOptions] = useState([]);
+  const [linkedCashAccountOptions, setLinkedCashAccountOptions] = useState([]);
+  const [linkedCashAccountLoading, setLinkedCashAccountLoading] = useState(false);
+  const [linkedCashAccountError, setLinkedCashAccountError] = useState("");
+  const [linkedCashAccountQuery, setLinkedCashAccountQuery] = useState("");
 
   const [reverseForm, setReverseForm] = useState(() => buildReverseDefaultForm());
   const [reverseSubmitting, setReverseSubmitting] = useState(false);
@@ -379,26 +414,19 @@ export default function CariSettlementsPage() {
       (row) => toPositiveInt(row?.cash_register_id) === registerId
     );
   }, [linkedCashForm.registerId, openCashSessions]);
-  const postingAccountOptions = useMemo(
-    () =>
-      (cashAccountOptions || []).filter((row) => {
-        if (!row) {
-          return false;
-        }
-        const legalEntityId = toPositiveInt(applyForm.legalEntityId);
-        if (
-          legalEntityId &&
-          toPositiveInt(row.legal_entity_id || row.legalEntityId) !== legalEntityId
-        ) {
-          return false;
-        }
-        const allowPosting =
-          row.allow_posting === 1 || row.allowPosting === true || row.allow_posting === true;
-        const isActive = row.is_active === 1 || row.isActive === true || row.is_active === true;
-        return allowPosting && isActive;
-      }),
-    [applyForm.legalEntityId, cashAccountOptions]
-  );
+  const linkedCashAccountLookupOptions = useMemo(() => {
+    const selectedAccountId = String(linkedCashForm.counterAccountId || "").trim();
+    const rows = Array.isArray(linkedCashAccountOptions) ? [...linkedCashAccountOptions] : [];
+    if (selectedAccountId && !rows.some((row) => String(row?.id || "") === selectedAccountId)) {
+      rows.unshift({
+        id: selectedAccountId,
+        code: `#${selectedAccountId}`,
+        name: `Selected account #${selectedAccountId}`,
+        account_breadcrumb: "",
+      });
+    }
+    return rows.map(mapGlAccountLookupOption).filter((row) => row.value);
+  }, [linkedCashAccountOptions, linkedCashForm.counterAccountId]);
   const counterpartyLookupOptions = useMemo(
     () => (counterpartyOptions || []).map(mapCounterpartyLookupOption).filter((row) => row.value),
     [counterpartyOptions]
@@ -492,12 +520,11 @@ export default function CariSettlementsPage() {
     let active = true;
     async function loadLookups() {
       const warnings = [];
-      const [legalEntitiesResult, registersResult, sessionsResult, accountsResult] =
+      const [legalEntitiesResult, registersResult, sessionsResult] =
         await Promise.allSettled([
           canReadOrg ? listLegalEntities({ limit: 500, includeInactive: true }) : Promise.resolve({ rows: [] }),
           canReadCashRegisters ? listCashRegisters({ limit: 300, offset: 0 }) : Promise.resolve({ rows: [] }),
           canReadCashSessions ? listCashSessions({ status: "OPEN", limit: 300, offset: 0 }) : Promise.resolve({ rows: [] }),
-          canReadGlAccounts ? listAccounts({ includeInactive: true, limit: 800 }) : Promise.resolve({ rows: [] }),
         ]);
 
       if (!active) {
@@ -525,13 +552,6 @@ export default function CariSettlementsPage() {
         warnings.push("Cash session lookup unavailable.");
       }
 
-      if (accountsResult.status === "fulfilled") {
-        setCashAccountOptions(Array.isArray(accountsResult.value?.rows) ? accountsResult.value.rows : []);
-      } else {
-        setCashAccountOptions([]);
-        warnings.push("GL account lookup unavailable.");
-      }
-
       setLookupWarning(warnings.join(" "));
     }
 
@@ -539,7 +559,77 @@ export default function CariSettlementsPage() {
     return () => {
       active = false;
     };
-  }, [canReadCashRegisters, canReadCashSessions, canReadGlAccounts, canReadOrg]);
+  }, [canReadCashRegisters, canReadCashSessions, canReadOrg]);
+
+  useEffect(() => {
+    const legalEntityId = toPositiveInt(applyForm.legalEntityId);
+    if (legalEntityId) {
+      return;
+    }
+    setLinkedCashAccountQuery("");
+  }, [applyForm.legalEntityId]);
+
+  useEffect(() => {
+    const legalEntityId = toPositiveInt(applyForm.legalEntityId);
+    const requiresLinkedCashLookup =
+      Boolean(canReadGlAccounts) &&
+      Boolean(linkedCashForm.createLinkedCashTransaction) &&
+      toUpper(linkedCashForm.paymentChannel) === "CASH" &&
+      Boolean(legalEntityId);
+
+    if (!requiresLinkedCashLookup) {
+      setLinkedCashAccountOptions([]);
+      setLinkedCashAccountLoading(false);
+      setLinkedCashAccountError("");
+      return;
+    }
+
+    let active = true;
+    const timer = setTimeout(() => {
+      void (async () => {
+        setLinkedCashAccountLoading(true);
+        setLinkedCashAccountError("");
+        try {
+          const normalizedQuery = normalizeLookupQuery(linkedCashAccountQuery);
+          const response = await listAccounts({
+            legalEntityId,
+            q: normalizedQuery || undefined,
+            limit: 80,
+          });
+          if (!active) {
+            return;
+          }
+          const rows = Array.isArray(response?.rows) ? response.rows : [];
+          setLinkedCashAccountOptions(
+            rows.filter((row) => isActivePostingAccount(row, legalEntityId))
+          );
+        } catch (error) {
+          if (!active) {
+            return;
+          }
+          setLinkedCashAccountOptions([]);
+          setLinkedCashAccountError(
+            normalizeUiError(error, "Failed to load linked-cash counterAccount options.")
+          );
+        } finally {
+          if (active) {
+            setLinkedCashAccountLoading(false);
+          }
+        }
+      })();
+    }, 180);
+
+    return () => {
+      active = false;
+      clearTimeout(timer);
+    };
+  }, [
+    canReadGlAccounts,
+    applyForm.legalEntityId,
+    linkedCashForm.createLinkedCashTransaction,
+    linkedCashForm.paymentChannel,
+    linkedCashAccountQuery,
+  ]);
 
   useEffect(() => {
     if (!canReadCards) {
@@ -1484,26 +1574,44 @@ export default function CariSettlementsPage() {
               </label>
               <label className="text-xs font-semibold uppercase tracking-wide text-slate-600">
                 counterAccount
-                {postingAccountOptions.length > 0 ? (
-                  <select
-                    className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm font-normal"
-                    value={linkedCashForm.counterAccountId}
-                    onChange={(event) =>
-                      setLinkedCashForm((prev) => ({
-                        ...prev,
-                        counterAccountId: event.target.value,
-                      }))
-                    }
-                    disabled={applySubmitting}
-                    required
-                  >
-                    <option value="">Select account</option>
-                    {postingAccountOptions.map((row) => (
-                      <option key={`linked-account-${row.id}`} value={row.id}>
-                        {`${row.code || row.id} - ${row.name || "-"}`}
-                      </option>
-                    ))}
-                  </select>
+                {canReadGlAccounts ? (
+                  <>
+                    <Combobox
+                      className="mt-1"
+                      value={linkedCashForm.counterAccountId}
+                      options={linkedCashAccountLookupOptions}
+                      loading={linkedCashAccountLoading}
+                      filterOptions={false}
+                      placeholder={
+                        toPositiveInt(applyForm.legalEntityId)
+                          ? "Type account code/name"
+                          : "Select legal entity first"
+                      }
+                      noOptionsText={
+                        toPositiveInt(applyForm.legalEntityId)
+                          ? "No accounts found. Type to refine search."
+                          : "Set legalEntityId to load accounts."
+                      }
+                      disabled={applySubmitting || !toPositiveInt(applyForm.legalEntityId)}
+                      onInputChange={(nextValue, meta) => {
+                        const reason = String(meta?.reason || "").trim().toLowerCase();
+                        if (reason === "select" || reason === "clear") {
+                          setLinkedCashAccountQuery("");
+                          return;
+                        }
+                        setLinkedCashAccountQuery(normalizeLookupQuery(nextValue));
+                      }}
+                      onChange={(nextValue) =>
+                        setLinkedCashForm((prev) => ({
+                          ...prev,
+                          counterAccountId: nextValue ? String(nextValue) : "",
+                        }))
+                      }
+                    />
+                    {linkedCashAccountError ? (
+                      <p className="mt-1 text-xs text-amber-700">{linkedCashAccountError}</p>
+                    ) : null}
+                  </>
                 ) : (
                   <input
                     type="number"

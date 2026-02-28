@@ -68,6 +68,7 @@
     "test:ux:prux09": "node scripts/test-ux-prux09-exception-bulk-actions.js",
     "test:ux:prux10": "node scripts/test-ux-prux10-shared-combobox.js",
     "test:ux:prux11": "node scripts/test-ux-prux11-counterparty-typeahead.js",
+    "test:ux:prux12": "node scripts/test-ux-prux12-gl-account-lookup-and-breadcrumb.js",
     "test:e2e:bank-payroll": "node scripts/test-e2e-bank-payroll-release-gate.js",
     "test:cari-pr01": "node scripts/test-cari-pr01-schema-and-constraints.js",
     "test:cari-pr02": "node scripts/test-cari-pr02-rbac-seed-and-guards.js",

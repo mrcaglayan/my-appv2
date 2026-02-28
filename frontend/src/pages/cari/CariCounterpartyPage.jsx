@@ -107,6 +107,10 @@ function normalizeFilterRole(value, fallback) {
   return normalized;
 }
 
+function normalizeLookupQuery(value) {
+  return String(value || "").trim();
+}
+
 function mapPaymentTermRows(response) {
   if (!Array.isArray(response?.rows)) {
     return [];
@@ -130,6 +134,13 @@ function mapAccountRows(response) {
     accountType: String(row?.account_type || row?.accountType || "").toUpperCase(),
     allowPosting: Boolean(row?.allow_posting ?? row?.allowPosting),
     isActive: Boolean(row?.is_active ?? row?.isActive),
+    breadcrumb: String(row?.account_breadcrumb || row?.accountBreadcrumb || "").trim(),
+    breadcrumbCodes: String(
+      row?.account_breadcrumb_codes || row?.accountBreadcrumbCodes || ""
+    ).trim(),
+    breadcrumbNames: String(
+      row?.account_breadcrumb_names || row?.accountBreadcrumbNames || ""
+    ).trim(),
   }));
 }
 
@@ -163,6 +174,7 @@ export default function CariCounterpartyPage({ pageKey = "buyerList" }) {
   const [createAccountOptions, setCreateAccountOptions] = useState([]);
   const [createAccountsLoading, setCreateAccountsLoading] = useState(false);
   const [createAccountsError, setCreateAccountsError] = useState("");
+  const [createAccountLookupQuery, setCreateAccountLookupQuery] = useState("");
 
   const [filters, setFilters] = useState(() =>
     createCounterpartyListFilters(config.roleDefault)
@@ -186,6 +198,7 @@ export default function CariCounterpartyPage({ pageKey = "buyerList" }) {
   const [editAccountOptions, setEditAccountOptions] = useState([]);
   const [editAccountsLoading, setEditAccountsLoading] = useState(false);
   const [editAccountsError, setEditAccountsError] = useState("");
+  const [editAccountLookupQuery, setEditAccountLookupQuery] = useState("");
 
   const legalEntityById = useMemo(() => {
     const map = new Map();
@@ -211,10 +224,12 @@ export default function CariCounterpartyPage({ pageKey = "buyerList" }) {
     setCreatePaymentTermsError("");
     setCreateAccountOptions([]);
     setCreateAccountsError("");
+    setCreateAccountLookupQuery("");
     setEditPaymentTerms([]);
     setEditPaymentTermsError("");
     setEditAccountOptions([]);
     setEditAccountsError("");
+    setEditAccountLookupQuery("");
   }, [config.roleDefault, config.mode]);
 
   useEffect(() => {
@@ -274,6 +289,21 @@ export default function CariCounterpartyPage({ pageKey = "buyerList" }) {
   }, [createForm.legalEntityId, isCreatePage, legalEntities]);
 
   useEffect(() => {
+    if (!isCreatePage) {
+      return;
+    }
+    setCreateAccountLookupQuery("");
+  }, [isCreatePage, createForm.legalEntityId]);
+
+  useEffect(() => {
+    if (!editingId) {
+      setEditAccountLookupQuery("");
+      return;
+    }
+    setEditAccountLookupQuery("");
+  }, [editingId, editingForm.legalEntityId]);
+
+  useEffect(() => {
     let cancelled = false;
     async function loadCreatePaymentTerms() {
       if (!isCreatePage) {
@@ -322,6 +352,7 @@ export default function CariCounterpartyPage({ pageKey = "buyerList" }) {
 
       await loadAccountsForLegalEntity({
         legalEntityId: createForm.legalEntityId,
+        queryText: createAccountLookupQuery,
         setRows: (rows) => {
           if (!cancelled) {
             setCreateAccountOptions(rows);
@@ -340,12 +371,20 @@ export default function CariCounterpartyPage({ pageKey = "buyerList" }) {
       });
     }
 
-    loadCreateAccounts();
+    const timer = setTimeout(() => {
+      void loadCreateAccounts();
+    }, 180);
     return () => {
       cancelled = true;
+      clearTimeout(timer);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isCreatePage, createForm.legalEntityId, accountPickerGates.shouldFetchGlAccounts]);
+  }, [
+    isCreatePage,
+    createForm.legalEntityId,
+    createAccountLookupQuery,
+    accountPickerGates.shouldFetchGlAccounts,
+  ]);
 
   useEffect(() => {
     let cancelled = false;
@@ -396,6 +435,7 @@ export default function CariCounterpartyPage({ pageKey = "buyerList" }) {
 
       await loadAccountsForLegalEntity({
         legalEntityId: editingForm.legalEntityId,
+        queryText: editAccountLookupQuery,
         setRows: (rows) => {
           if (!cancelled) {
             setEditAccountOptions(rows);
@@ -414,12 +454,20 @@ export default function CariCounterpartyPage({ pageKey = "buyerList" }) {
       });
     }
 
-    loadEditAccounts();
+    const timer = setTimeout(() => {
+      void loadEditAccounts();
+    }, 180);
     return () => {
       cancelled = true;
+      clearTimeout(timer);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [editingId, editingForm.legalEntityId, accountPickerGates.shouldFetchGlAccounts]);
+  }, [
+    editingId,
+    editingForm.legalEntityId,
+    editAccountLookupQuery,
+    accountPickerGates.shouldFetchGlAccounts,
+  ]);
 
   async function loadCounterpartyRows(nextFilters = filters) {
     if (!canRead) {
@@ -478,6 +526,7 @@ export default function CariCounterpartyPage({ pageKey = "buyerList" }) {
 
   async function loadAccountsForLegalEntity({
     legalEntityId,
+    queryText,
     setRows,
     setLoading,
     setError,
@@ -493,8 +542,11 @@ export default function CariCounterpartyPage({ pageKey = "buyerList" }) {
     setLoading(true);
     setError("");
     try {
+      const normalizedQuery = normalizeLookupQuery(queryText);
       const response = await listAccounts({
         legalEntityId: parsedLegalEntityId,
+        q: normalizedQuery || undefined,
+        limit: 80,
       });
       setRows(mapAccountRows(response));
     } catch (err) {
@@ -547,6 +599,7 @@ export default function CariCounterpartyPage({ pageKey = "buyerList" }) {
     if (!canUpsert) {
       return;
     }
+    setEditAccountLookupQuery("");
     setEditLoading(true);
     setEditError("");
     setEditMessage("");
@@ -581,6 +634,24 @@ export default function CariCounterpartyPage({ pageKey = "buyerList" }) {
     }
   }
 
+  function handleCreateAccountLookupInput(nextValue, meta = {}) {
+    const reason = String(meta?.reason || "").trim().toLowerCase();
+    if (reason === "select" || reason === "clear") {
+      setCreateAccountLookupQuery("");
+      return;
+    }
+    setCreateAccountLookupQuery(normalizeLookupQuery(nextValue));
+  }
+
+  function handleEditAccountLookupInput(nextValue, meta = {}) {
+    const reason = String(meta?.reason || "").trim().toLowerCase();
+    if (reason === "select" || reason === "clear") {
+      setEditAccountLookupQuery("");
+      return;
+    }
+    setEditAccountLookupQuery(normalizeLookupQuery(nextValue));
+  }
+
   function renderCreatePage() {
     return (
       <CounterpartyForm
@@ -598,6 +669,7 @@ export default function CariCounterpartyPage({ pageKey = "buyerList" }) {
         accountOptions={createAccountOptions}
         accountOptionsLoading={createAccountsLoading}
         accountOptionsError={createAccountsError}
+        onAccountLookupQueryChange={handleCreateAccountLookupInput}
         canReadGlAccounts={accountPickerGates.showAccountPickers}
         accountReadFallbackMessage={
           "Missing permission: gl.account.read. AR/AP account selectors are hidden."
@@ -605,7 +677,10 @@ export default function CariCounterpartyPage({ pageKey = "buyerList" }) {
         canSubmit={canUpsert}
         submitting={createSaving}
         onSubmit={handleCreateSubmit}
-        onReset={() => setCreateForm(buildInitialCounterpartyForm(config.roleDefault))}
+        onReset={() => {
+          setCreateForm(buildInitialCounterpartyForm(config.roleDefault));
+          setCreateAccountLookupQuery("");
+        }}
         submitLabel="Create Card"
         serverError={createError}
         serverMessage={createMessage}
@@ -936,6 +1011,7 @@ export default function CariCounterpartyPage({ pageKey = "buyerList" }) {
             accountOptions={editAccountOptions}
             accountOptionsLoading={editAccountsLoading}
             accountOptionsError={editAccountsError}
+            onAccountLookupQueryChange={handleEditAccountLookupInput}
             canReadGlAccounts={accountPickerGates.showAccountPickers}
             accountReadFallbackMessage={
               "Missing permission: gl.account.read. AR/AP account selectors are hidden."
@@ -947,6 +1023,7 @@ export default function CariCounterpartyPage({ pageKey = "buyerList" }) {
               setEditingId(null);
               setEditError("");
               setEditMessage("");
+              setEditAccountLookupQuery("");
             }}
             submitLabel="Save Changes"
             serverError={editError}

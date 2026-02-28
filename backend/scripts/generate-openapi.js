@@ -1981,6 +1981,15 @@ const spec = {
           queryParamInt("legalEntityId", false, "Legal entity identifier"),
           {
             in: "query",
+            name: "q",
+            required: false,
+            schema: { type: "string" },
+            description: "Case-insensitive account code/name search text",
+          },
+          queryParamInt("limit", false, "Maximum rows to return"),
+          queryParamInt("offset", false, "Row offset"),
+          {
+            in: "query",
             name: "includeInactive",
             required: false,
             schema: { type: "boolean" },
