@@ -1249,7 +1249,6 @@ export default function GlSetupPage() {
     setMessage("");
     try {
       for (const row of payloadRows) {
-        // eslint-disable-next-line no-await-in-loop
         await upsertJournalPurposeAccount({
           legalEntityId,
           purposeCode: row.purposeCode,

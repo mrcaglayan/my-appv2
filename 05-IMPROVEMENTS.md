@@ -30,12 +30,12 @@ Tag legend: `(hot: yes)` means likely touches conflict-prone files (`AppLayout.j
 - [x] PR-UX10 Shared `Combobox` component (new `frontend/src/components`) (implemented: reusable accessible combobox with keyboard nav + loading/empty states + custom option rendering, hot: no)
 - [x] PR-UX11 Counterparty typeahead in Cari Documents/Settlements (implemented: shared Combobox wired to Cari Documents filter/create/edit and Cari Settlements apply/bank-apply counterparty selectors, hot: no)
 - [x] PR-UX12 GL account lookup with searchable API (`q`) + breadcrumb display (implemented: `GET /api/v1/gl/accounts` now supports `q` + breadcrumb fields and Cari Counterparty/Cari Settlements account selectors use server-side q lookup with breadcrumb descriptions, hot: no)
-- [ ] PR-UX13-A Inline counterparty create from lookups (API exists; not started)
-- [ ] PR-UX13-B Inline payment term create (backend write endpoint required first) (blocked)
+- [x] PR-UX13-A Inline counterparty create from lookups (implemented: inline create action from typed Combobox input in Cari Documents create/edit and Cari Settlements apply/bank-apply lookups; creates counterparty, refreshes local lookup options, auto-selects new `counterpartyId`, hot: no)
+- [ ] PR-UX13-B Inline payment term create (backend write endpoint now available via `POST /api/v1/cari/payment-terms`; inline create UX not started)
 
-- [ ] PR-UX14 Shared lifecycle rules + `StatusTimeline` component (not started)
-- [ ] PR-UX15 Apply lifecycle UI to Cari Documents (not started)
-- [ ] PR-UX16 Apply lifecycle UI to Cash Transactions/Sessions (not started)
+- [x] PR-UX14 Shared lifecycle rules + `StatusTimeline` component (implemented: reusable lifecycle rule registry + transition helpers in `frontend/src/lifecycle/lifecycleRules.js` and generic `frontend/src/components/StatusTimeline.jsx` for timeline rendering, hot: no)
+- [x] PR-UX15 Apply lifecycle UI to Cari Documents (implemented: detail panel now renders lifecycle snapshot + shared `StatusTimeline` built from document status/timestamps via shared lifecycle rules helpers, hot: no)
+- [x] PR-UX16 Apply lifecycle UI to Cash Transactions/Sessions (implemented: cash transactions and cash sessions now expose lifecycle inspection sections with snapshot + shared `StatusTimeline`, backed by shared lifecycle rules and per-row event mapping, hot: no)
 - [ ] PR-UX17 Apply lifecycle UI to Payroll flows (not started)
 
 - [ ] PR-UX18 Deep-link support (`documentId/journalId/exceptionId`) (not started)
@@ -78,7 +78,8 @@ Intentional not-yet-implemented placeholders (Stock, Fixed Assets, generic Repor
 - [ ] RS-WIRE-03 Add release-gate smoke coverage for each newly implemented improvement page before marking `[x]`
 
 ## Dependency Follow-ups (Non-placeholder blockers)
-- [ ] RS-DEP-01 Payment term write API for UX13-B (`POST /api/v1/cari/payment-terms` + permission + frontend client)
+- [x] RS-DEP-01 Payment term write API for UX13-B (`POST /api/v1/cari/payment-terms` + `cari.card.upsert` permission guard + frontend client `createCariPaymentTerm`) (implemented)
+  smoke: `backend/scripts/test-ux-rsdep01-payment-term-write-api.js`
 - [ ] RS-DEP-02 Source-linking contract for UX19 Related Panel:
   choose minimal contract (`journal_source_links` table OR `source_ref_type` + `source_ref_id` on journals), write links during posting, then ship UI
 - [x] RS-DEP-03 Global frontend error/toast strategy required by CORE05 (`frontend/src/api/client.js` interceptor + UI surface) (implemented)
@@ -112,11 +113,19 @@ Intentional not-yet-implemented placeholders (Stock, Fixed Assets, generic Repor
   smoke: `backend/scripts/test-ux-prux11-counterparty-typeahead.js`
 - [x] PR-UX12 acceptance: GL account lookups support backend `q` search and show breadcrumb paths in Cari account selector UIs
   smoke: `backend/scripts/test-ux-prux12-gl-account-lookup-and-breadcrumb.js`
+- [x] PR-UX13-A acceptance: users with `cari.card.upsert` can create counterparties inline from lookup text and continue flow with the new card auto-selected
+  smoke: `backend/scripts/test-ux-prux13a-inline-counterparty-create.js`
+- [x] PR-UX14 acceptance: shared lifecycle utilities expose canonical statuses/transitions and `StatusTimeline` renders ordered current/done/upcoming states for module reuse
+  smoke: `backend/scripts/test-ux-prux14-lifecycle-rules-and-status-timeline.js`
+- [x] PR-UX15 acceptance: Cari Documents detail view shows lifecycle snapshot + timeline derived from shared rules/events and surfaces next allowed transitions for current status
+  smoke: `backend/scripts/test-ux-prux15-cari-documents-lifecycle-ui.js`
+- [x] PR-UX16 acceptance: Cash Transactions and Cash Sessions expose lifecycle snapshot + timeline views using shared rules/timeline component with selectable row/session context
+  smoke: `backend/scripts/test-ux-prux16-cash-lifecycle-ui.js`
 - [x] PR-CORE05 acceptance: standardized user-facing error handling + copyable requestId/details
   smoke: `backend/scripts/test-ux-prcore05-error-envelope.js`
 - [x] PR-CORE01 acceptance: key list endpoints return consistent `rows + total + limit + offset` with `pagination` metadata
   smoke: `backend/scripts/test-ux-prcore01-pagination-contracts.js` (to add)
 
 ## Immediate Next Step
-- Continue with `PR-UX13-A`.
+- Proceed with `PR-UX13-B` (now unblocked).
 - After each merged PR, update this tracker line from `[ ]` to `[x]` with a short `(implemented)` note.

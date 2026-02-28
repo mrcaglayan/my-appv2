@@ -17,6 +17,20 @@ function mapPaymentTermRow(row) {
   };
 }
 
+async function assertLegalEntityBelongsToTenant(tenantId, legalEntityId, fieldLabel = "legalEntityId") {
+  const result = await query(
+    `SELECT id
+     FROM legal_entities
+     WHERE tenant_id = ?
+       AND id = ?
+     LIMIT 1`,
+    [tenantId, legalEntityId]
+  );
+  if (!result.rows?.[0]) {
+    throw badRequest(`${fieldLabel} not found for tenant`);
+  }
+}
+
 export async function resolvePaymentTermScope(paymentTermId, tenantId) {
   const parsedPaymentTermId = parsePositiveInt(paymentTermId);
   const parsedTenantId = parsePositiveInt(tenantId);
@@ -143,4 +157,59 @@ export async function getPaymentTermByIdForTenant({
 
   assertScopeAccess(req, "legal_entity", row.legal_entity_id, "paymentTermId");
   return mapPaymentTermRow(row);
+}
+
+export async function createPaymentTerm({
+  req,
+  payload,
+  assertScopeAccess,
+}) {
+  await assertLegalEntityBelongsToTenant(payload.tenantId, payload.legalEntityId, "legalEntityId");
+  assertScopeAccess(req, "legal_entity", payload.legalEntityId, "legalEntityId");
+
+  let paymentTermId = 0;
+  try {
+    const insertResult = await query(
+      `INSERT INTO payment_terms (
+         tenant_id,
+         legal_entity_id,
+         code,
+         name,
+         due_days,
+         grace_days,
+         is_end_of_month,
+         status
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        payload.tenantId,
+        payload.legalEntityId,
+        payload.code,
+        payload.name,
+        payload.dueDays,
+        payload.graceDays,
+        payload.isEndOfMonth ? 1 : 0,
+        payload.status,
+      ]
+    );
+    paymentTermId = Number(insertResult.rows?.insertId || 0);
+  } catch (error) {
+    const code = Number(error?.errno || 0);
+    const message = String(error?.message || "").toLowerCase();
+    if (code === 1062 || message.includes("duplicate")) {
+      throw badRequest("Payment term code already exists for legalEntityId");
+    }
+    throw error;
+  }
+
+  if (!Number.isInteger(paymentTermId) || paymentTermId <= 0) {
+    throw badRequest("Failed to create payment term");
+  }
+
+  const row = await getPaymentTermByIdForTenant({
+    req,
+    tenantId: payload.tenantId,
+    paymentTermId,
+    assertScopeAccess,
+  });
+  return row;
 }

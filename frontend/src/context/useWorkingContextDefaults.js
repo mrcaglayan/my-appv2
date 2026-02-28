@@ -5,9 +5,39 @@ function normalizeText(value) {
   return String(value ?? "").trim();
 }
 
+function serializeDependency(value) {
+  if (value === null) {
+    return "null";
+  }
+
+  const valueType = typeof value;
+  if (
+    valueType === "string" ||
+    valueType === "number" ||
+    valueType === "boolean" ||
+    valueType === "bigint" ||
+    valueType === "undefined"
+  ) {
+    return `${valueType}:${String(value)}`;
+  }
+
+  if (valueType === "function") {
+    return `function:${value.name || "anonymous"}`;
+  }
+
+  try {
+    return `json:${JSON.stringify(value)}`;
+  } catch {
+    return `object:${Object.prototype.toString.call(value)}`;
+  }
+}
+
 export function useWorkingContextDefaults(setState, mappings, dependencies = []) {
   const { workingContext } = useWorkingContext();
   const lastAutoAppliedRef = useRef({});
+  const dependencyKey = Array.isArray(dependencies)
+    ? dependencies.map(serializeDependency).join("|")
+    : "";
 
   useEffect(() => {
     if (typeof setState !== "function" || !Array.isArray(mappings) || mappings.length === 0) {
@@ -63,5 +93,5 @@ export function useWorkingContextDefaults(setState, mappings, dependencies = [])
       lastAutoAppliedRef.current = nextAutoApplied;
       return changed ? nextState : previousState;
     });
-  }, [workingContext, setState, mappings, ...dependencies]);
+  }, [workingContext, setState, mappings, dependencyKey]);
 }

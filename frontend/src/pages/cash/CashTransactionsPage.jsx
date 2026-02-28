@@ -16,10 +16,16 @@ import { listCariCounterparties } from "../../api/cariCounterparty.js";
 import { getCariOpenItemsReport } from "../../api/cariReports.js";
 import { listAccounts } from "../../api/glAdmin.js";
 import { useAuth } from "../../auth/useAuth.js";
+import StatusTimeline from "../../components/StatusTimeline.jsx";
 import { useWorkingContextDefaults } from "../../context/useWorkingContextDefaults.js";
 import { usePersistedFilters } from "../../hooks/usePersistedFilters.js";
 import { useToastMessage } from "../../hooks/useToastMessage.js";
 import { useI18n } from "../../i18n/useI18n.js";
+import {
+  buildLifecycleTimelineSteps,
+  getLifecycleAllowedActions,
+  getLifecycleStatusMeta,
+} from "../../lifecycle/lifecycleRules.js";
 import CashControlModeBanner from "./CashControlModeBanner.jsx";
 
 const MANUAL_TXN_TYPES = [
@@ -217,6 +223,83 @@ function buildInitialFilters(presetTxnType) {
     bookDateFrom: "",
     bookDateTo: "",
   };
+}
+
+function buildUserActorLabel(userId) {
+  const parsed = toPositiveInt(userId);
+  return parsed ? `User #${parsed}` : null;
+}
+
+function buildCashTransactionLifecycleEvents(row, t) {
+  if (!row) {
+    return [];
+  }
+  const status = toUpper(row?.status);
+  const createdAt = row?.created_at || row?.createdAt || null;
+  const submittedAt = row?.submitted_at || row?.submittedAt || null;
+  const approvedAt = row?.approved_at || row?.approvedAt || null;
+  const postedAt = row?.posted_at || row?.postedAt || null;
+  const cancelledAt = row?.cancelled_at || row?.cancelledAt || null;
+  const reversedAt = row?.reversed_at || row?.reversedAt || null;
+  const updatedAt = row?.updated_at || row?.updatedAt || null;
+
+  const createdByUserId = row?.created_by_user_id || row?.createdByUserId;
+  const submittedByUserId = row?.submitted_by_user_id || row?.submittedByUserId;
+  const approvedByUserId = row?.approved_by_user_id || row?.approvedByUserId;
+  const postedByUserId = row?.posted_by_user_id || row?.postedByUserId;
+  const cancelledByUserId = row?.cancelled_by_user_id || row?.cancelledByUserId;
+  const reversedByUserId = row?.reversed_by_user_id || row?.reversedByUserId;
+
+  const events = [];
+  if (createdAt) {
+    events.push({
+      statusCode: "DRAFT",
+      at: createdAt,
+      actorName: buildUserActorLabel(createdByUserId),
+      note: t("cashTransactions.lifecycle.events.draft"),
+    });
+  }
+  if (submittedAt) {
+    events.push({
+      statusCode: "SUBMITTED",
+      at: submittedAt,
+      actorName: buildUserActorLabel(submittedByUserId),
+      note: t("cashTransactions.lifecycle.events.submitted"),
+    });
+  }
+  if (approvedAt) {
+    events.push({
+      statusCode: "APPROVED",
+      at: approvedAt,
+      actorName: buildUserActorLabel(approvedByUserId),
+      note: t("cashTransactions.lifecycle.events.approved"),
+    });
+  }
+  if (postedAt) {
+    events.push({
+      statusCode: "POSTED",
+      at: postedAt,
+      actorName: buildUserActorLabel(postedByUserId),
+      note: t("cashTransactions.lifecycle.events.posted"),
+    });
+  }
+  if (status === "CANCELLED") {
+    events.push({
+      statusCode: "CANCELLED",
+      at: cancelledAt || updatedAt || createdAt,
+      actorName: buildUserActorLabel(cancelledByUserId),
+      note: String(row?.cancel_reason || row?.cancelReason || "").trim() || t("cashTransactions.lifecycle.events.cancelled"),
+    });
+  }
+  if (status === "REVERSED") {
+    events.push({
+      statusCode: "REVERSED",
+      at: reversedAt || updatedAt || postedAt,
+      actorName: buildUserActorLabel(reversedByUserId),
+      note: String(row?.reverse_reason || row?.reverseReason || "").trim() || t("cashTransactions.lifecycle.events.reversed"),
+    });
+  }
+  return events;
 }
 
 function statusClassName(status) {
@@ -457,6 +540,7 @@ export default function CashTransactionsPage() {
   );
   const [form, setForm] = useState(buildInitialForm(presetTxnType));
   const [actionForm, setActionForm] = useState(null);
+  const [selectedLifecycleTransactionId, setSelectedLifecycleTransactionId] = useState(null);
   const [counterpartyQuery, setCounterpartyQuery] = useState("");
   const [counterpartyOptions, setCounterpartyOptions] = useState([]);
   const [counterpartyLoading, setCounterpartyLoading] = useState(false);
@@ -517,6 +601,15 @@ export default function CashTransactionsPage() {
     }
     return rows.find((row) => toPositiveInt(row?.id) === transactionId) || null;
   }, [actionForm?.transactionId, rows]);
+  const selectedLifecycleTransactionRow = useMemo(() => {
+    const transactionId = toPositiveInt(
+      selectedLifecycleTransactionId || actionForm?.transactionId
+    );
+    if (!transactionId) {
+      return null;
+    }
+    return rows.find((row) => toPositiveInt(row?.id) === transactionId) || null;
+  }, [actionForm?.transactionId, rows, selectedLifecycleTransactionId]);
   const selectedTransitTargetOpenSessions = useMemo(() => {
     if (actionForm?.type !== "receiveTransit") {
       return [];
@@ -575,6 +668,35 @@ export default function CashTransactionsPage() {
   }, [actionForm]);
   const canFilterByTxnType = !presetTxnType;
   const effectiveTxnTypeFilter = presetTxnType || filters.txnType || "";
+  const selectedTransactionLifecycleMeta = useMemo(
+    () => getLifecycleStatusMeta("cashTransaction", selectedLifecycleTransactionRow?.status),
+    [selectedLifecycleTransactionRow?.status]
+  );
+  const selectedTransactionLifecycleActions = useMemo(
+    () => getLifecycleAllowedActions("cashTransaction", selectedLifecycleTransactionRow?.status),
+    [selectedLifecycleTransactionRow?.status]
+  );
+  const selectedTransactionLifecycleActionLabels = useMemo(() => {
+    const labelsByAction = {
+      submit: t("cashTransactions.lifecycle.actionLabels.submit"),
+      approve: t("cashTransactions.lifecycle.actionLabels.approve"),
+      post: t("cashTransactions.lifecycle.actionLabels.post"),
+      cancel: t("cashTransactions.lifecycle.actionLabels.cancel"),
+      reverse: t("cashTransactions.lifecycle.actionLabels.reverse"),
+    };
+    return selectedTransactionLifecycleActions.map(
+      (row) => labelsByAction[row.action] || row.label
+    );
+  }, [selectedTransactionLifecycleActions, t]);
+  const selectedTransactionLifecycleTimeline = useMemo(
+    () =>
+      buildLifecycleTimelineSteps(
+        "cashTransaction",
+        selectedLifecycleTransactionRow?.status,
+        buildCashTransactionLifecycleEvents(selectedLifecycleTransactionRow, t)
+      ),
+    [selectedLifecycleTransactionRow, t]
+  );
 
   const createWarnings = useMemo(() => {
     const warnings = [];
@@ -767,6 +889,7 @@ export default function CashTransactionsPage() {
   useEffect(() => {
     setForm(buildInitialForm(presetTxnType));
     setActionForm(null);
+    setSelectedLifecycleTransactionId(null);
     setCounterpartyQuery("");
     setCounterpartyOptions([]);
   }, [presetTxnType]);
@@ -775,6 +898,16 @@ export default function CashTransactionsPage() {
     loadPageData(filters);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [canRead, presetTxnType, canReadAccounts]);
+
+  useEffect(() => {
+    const selectedId = toPositiveInt(selectedLifecycleTransactionId);
+    if (!selectedId) {
+      return;
+    }
+    if (!rows.some((row) => toPositiveInt(row?.id) === selectedId)) {
+      setSelectedLifecycleTransactionId(null);
+    }
+  }, [rows, selectedLifecycleTransactionId]);
 
   useEffect(() => {
     if (!canCreate) {
@@ -864,7 +997,7 @@ export default function CashTransactionsPage() {
     return () => {
       active = false;
     };
-  }, [canReadCariCards, counterpartyQuery, form.txnType, selectedRegister?.legal_entity_id]);
+  }, [canReadCariCards, counterpartyQuery, form.txnType, selectedRegister?.legal_entity_id, t]);
 
   useEffect(() => {
     if (actionForm?.type !== "applyCari" || !selectedActionRow) {
@@ -928,7 +1061,7 @@ export default function CashTransactionsPage() {
     return () => {
       active = false;
     };
-  }, [actionForm?.type, actionForm?.asOfDate, canReadCariReports, selectedActionRow]);
+  }, [actionForm?.type, actionForm?.asOfDate, canReadCariReports, selectedActionRow, t]);
 
   function clearMessages() {
     setError("");
@@ -1220,6 +1353,7 @@ export default function CashTransactionsPage() {
       setSimpleError(t("cashTransactions.errors.actionRowMissing"));
       return;
     }
+    setSelectedLifecycleTransactionId(String(transactionId));
 
     if (type === "post" && !canPost) {
       setSimpleError(t("cashTransactions.errors.missingPostPermission"));
@@ -2563,6 +2697,47 @@ export default function CashTransactionsPage() {
         </section>
       ) : null}
 
+      {selectedLifecycleTransactionRow ? (
+        <section className="rounded-xl border border-slate-200 bg-white p-4">
+          <h2 className="mb-3 text-sm font-semibold text-slate-700">
+            {t("cashTransactions.sections.lifecycle")}
+          </h2>
+          <div className="grid gap-3 md:grid-cols-2">
+            <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-700">
+                {t("cashTransactions.lifecycle.snapshotTitle")}
+              </p>
+              <p className="mt-1 text-sm font-semibold text-slate-900">
+                {t("cashTransactions.selectedTransactionSummary", {
+                  id: selectedLifecycleTransactionRow.id || "-",
+                  txnNo: selectedLifecycleTransactionRow.txn_no || "-",
+                  status: localizeTxnStatus(selectedLifecycleTransactionRow.status),
+                })}
+              </p>
+              <p className="mt-1 text-sm text-slate-700">
+                {selectedTransactionLifecycleMeta?.description || ""}
+              </p>
+              {selectedTransactionLifecycleActionLabels.length > 0 ? (
+                <p className="mt-1 text-xs text-slate-600">
+                  {t("cashTransactions.lifecycle.nextTransitions", {
+                    actions: selectedTransactionLifecycleActionLabels.join(", "),
+                  })}
+                </p>
+              ) : (
+                <p className="mt-1 text-xs text-slate-500">
+                  {t("cashTransactions.lifecycle.noTransitions")}
+                </p>
+              )}
+            </div>
+            <StatusTimeline
+              title={t("cashTransactions.lifecycle.timelineTitle")}
+              steps={selectedTransactionLifecycleTimeline}
+              emptyText={t("cashTransactions.lifecycle.timelineEmpty")}
+            />
+          </div>
+        </section>
+      ) : null}
+
       <section className="rounded-xl border border-slate-200 bg-white p-4">
         <h2 className="mb-3 text-sm font-semibold text-slate-700">
           {t("cashTransactions.sections.list")}
@@ -2596,10 +2771,14 @@ export default function CashTransactionsPage() {
                 const rowStatus = toUpper(row.status);
                 const rowStatusLabel = localizeTxnStatus(row.status);
                 const rowIsPosted = rowStatus === "POSTED";
+                const rowIsLifecycleSelected =
+                  toPositiveInt(row.id) === toPositiveInt(selectedLifecycleTransactionId);
                 return (
                   <tr
                     key={`cash-transaction-row-${row.id}`}
-                    className={`border-t border-slate-100 ${rowIsPosted ? "bg-slate-50/60" : ""}`}
+                    className={`border-t border-slate-100 ${
+                      rowIsLifecycleSelected ? "bg-cyan-50" : rowIsPosted ? "bg-slate-50/60" : ""
+                    }`}
                   >
                     <td className="px-3 py-2">{row.id}</td>
                     <td className="px-3 py-2">{row.txn_no || "-"}</td>
@@ -2736,6 +2915,13 @@ export default function CashTransactionsPage() {
                             {t("cashTransactions.actions.applyCari")}
                           </button>
                         ) : null}
+                        <button
+                          type="button"
+                          onClick={() => setSelectedLifecycleTransactionId(String(row.id))}
+                          className="rounded-md border border-slate-300 px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                        >
+                          {t("cashTransactions.actions.inspectLifecycle")}
+                        </button>
                         {toPositiveInt(row.linked_cari_settlement_batch_id || row.linkedCariSettlementBatchId) ||
                         toPositiveInt(row.linked_cari_unapplied_cash_id || row.linkedCariUnappliedCashId) ? (
                           <span className="inline-flex rounded bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-700">

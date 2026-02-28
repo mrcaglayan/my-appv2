@@ -11,7 +11,10 @@ import {
   listCashSessions,
 } from "../../api/cashAdmin.js";
 import { listAccounts } from "../../api/glAdmin.js";
-import { listCariCounterparties } from "../../api/cariCounterparty.js";
+import {
+  createCariCounterparty,
+  listCariCounterparties,
+} from "../../api/cariCounterparty.js";
 import { listLegalEntities } from "../../api/orgAdmin.js";
 import { getCariOpenItemsReport } from "../../api/cariReports.js";
 import { extractCariReplayAndRisks } from "../../api/cariCommon.js";
@@ -33,6 +36,12 @@ import {
   loadPendingIdempotencyKey,
   shouldClearPendingKeyAfterError,
 } from "./cariIdempotency.js";
+import {
+  buildInlineCounterpartyCode,
+  normalizeLookupQuery,
+  prependOrReplaceCounterpartyOption,
+  resolveInlineCounterpartyRoleFlags,
+} from "./counterpartyInlineCreate.js";
 
 function todayIsoDate() {
   return new Date().toISOString().slice(0, 10);
@@ -73,10 +82,6 @@ function mapCounterpartyLookupOption(row) {
     label: name ? `${code || id} - ${name}` : String(code || id || "-"),
     description: counterpartyType || "OTHER",
   };
-}
-
-function normalizeLookupQuery(value) {
-  return String(value || "").trim();
 }
 
 function mapGlAccountLookupOption(row) {
@@ -301,6 +306,7 @@ export default function CariSettlementsPage() {
   const canBankApply = hasPermission("cari.bank.apply");
   const canReadReports = hasPermission("cari.report.read");
   const canReadCards = hasPermission("cari.card.read");
+  const canUpsertCards = hasPermission("cari.card.upsert");
   const canReadOrg = hasPermission("org.tree.read");
   const canCreateCashTxn = hasPermission("cash.txn.create");
   const canReadCashRegisters = hasPermission("cash.register.read");
@@ -330,8 +336,16 @@ export default function CariSettlementsPage() {
   const [legalEntities, setLegalEntities] = useState([]);
   const [counterpartyOptions, setCounterpartyOptions] = useState([]);
   const [counterpartyLoading, setCounterpartyLoading] = useState(false);
+  const [applyCounterpartyLookupQuery, setApplyCounterpartyLookupQuery] = useState("");
+  const [applyInlineCounterpartySaving, setApplyInlineCounterpartySaving] = useState(false);
+  const [applyInlineCounterpartyError, setApplyInlineCounterpartyError] = useState("");
+  const [applyInlineCounterpartyMessage, setApplyInlineCounterpartyMessage] = useState("");
   const [bankApplyCounterpartyOptions, setBankApplyCounterpartyOptions] = useState([]);
   const [bankApplyCounterpartyLoading, setBankApplyCounterpartyLoading] = useState(false);
+  const [bankApplyCounterpartyLookupQuery, setBankApplyCounterpartyLookupQuery] = useState("");
+  const [bankApplyInlineCounterpartySaving, setBankApplyInlineCounterpartySaving] = useState(false);
+  const [bankApplyInlineCounterpartyError, setBankApplyInlineCounterpartyError] = useState("");
+  const [bankApplyInlineCounterpartyMessage, setBankApplyInlineCounterpartyMessage] = useState("");
   const [lookupWarning, setLookupWarning] = useState("");
   const [cashRegisterOptions, setCashRegisterOptions] = useState([]);
   const [openCashSessions, setOpenCashSessions] = useState([]);
@@ -437,6 +451,24 @@ export default function CariSettlementsPage() {
         .map(mapCounterpartyLookupOption)
         .filter((row) => row.value),
     [bankApplyCounterpartyOptions]
+  );
+  const applyInlineCounterpartyName = normalizeLookupQuery(applyCounterpartyLookupQuery);
+  const bankApplyInlineCounterpartyName = normalizeLookupQuery(
+    bankApplyCounterpartyLookupQuery
+  );
+  const canInlineCreateCounterpartyInApplyForm = Boolean(
+    canApply &&
+      canReadCards &&
+      canUpsertCards &&
+      toPositiveInt(applyForm.legalEntityId) &&
+      applyInlineCounterpartyName
+  );
+  const canInlineCreateCounterpartyInBankApplyForm = Boolean(
+    canBankApply &&
+      canReadCards &&
+      canUpsertCards &&
+      toPositiveInt(bankApplyForm.legalEntityId) &&
+      bankApplyInlineCounterpartyName
   );
 
   const applyIntentScope = useMemo(
@@ -846,6 +878,105 @@ export default function CariSettlementsPage() {
     };
   }
 
+  async function handleInlineCreateCounterpartyForApplyForm() {
+    setApplyInlineCounterpartyError("");
+    setApplyInlineCounterpartyMessage("");
+    const legalEntityId = toPositiveInt(applyForm.legalEntityId);
+    const name = normalizeLookupQuery(applyCounterpartyLookupQuery);
+    if (!canUpsertCards) {
+      setApplyInlineCounterpartyError("Missing permission: cari.card.upsert");
+      return;
+    }
+    if (!legalEntityId) {
+      setApplyInlineCounterpartyError("Select legalEntityId before creating a counterparty.");
+      return;
+    }
+    if (!name) {
+      setApplyInlineCounterpartyError("Type a counterparty name in lookup before creating.");
+      return;
+    }
+
+    setApplyInlineCounterpartySaving(true);
+    try {
+      const payload = {
+        legalEntityId,
+        code: buildInlineCounterpartyCode({ legalEntityId, name }),
+        name,
+        status: "ACTIVE",
+        ...resolveInlineCounterpartyRoleFlags(applyForm.direction),
+      };
+      const response = await createCariCounterparty(payload);
+      const row = response?.row || null;
+      const counterpartyId = toPositiveInt(row?.id);
+      if (!counterpartyId) {
+        throw new Error("Counterparty create response is missing row.id.");
+      }
+      setCounterpartyOptions((prev) => prependOrReplaceCounterpartyOption(prev, row));
+      updateApplyForm("counterpartyId", String(counterpartyId));
+      setApplyCounterpartyLookupQuery("");
+      setApplyInlineCounterpartyMessage(
+        `Counterparty created and selected. counterpartyId=${counterpartyId}`
+      );
+    } catch (error) {
+      setApplyInlineCounterpartyError(
+        normalizeUiError(error, "Failed to create counterparty from lookup.")
+      );
+    } finally {
+      setApplyInlineCounterpartySaving(false);
+    }
+  }
+
+  async function handleInlineCreateCounterpartyForBankApplyForm() {
+    setBankApplyInlineCounterpartyError("");
+    setBankApplyInlineCounterpartyMessage("");
+    const legalEntityId = toPositiveInt(bankApplyForm.legalEntityId);
+    const name = normalizeLookupQuery(bankApplyCounterpartyLookupQuery);
+    if (!canUpsertCards) {
+      setBankApplyInlineCounterpartyError("Missing permission: cari.card.upsert");
+      return;
+    }
+    if (!legalEntityId) {
+      setBankApplyInlineCounterpartyError("Select legalEntityId before creating a counterparty.");
+      return;
+    }
+    if (!name) {
+      setBankApplyInlineCounterpartyError("Type a counterparty name in lookup before creating.");
+      return;
+    }
+
+    setBankApplyInlineCounterpartySaving(true);
+    try {
+      const payload = {
+        legalEntityId,
+        code: buildInlineCounterpartyCode({ legalEntityId, name }),
+        name,
+        status: "ACTIVE",
+        ...resolveInlineCounterpartyRoleFlags(bankApplyForm.direction),
+      };
+      const response = await createCariCounterparty(payload);
+      const row = response?.row || null;
+      const counterpartyId = toPositiveInt(row?.id);
+      if (!counterpartyId) {
+        throw new Error("Counterparty create response is missing row.id.");
+      }
+      setBankApplyCounterpartyOptions((prev) => prependOrReplaceCounterpartyOption(prev, row));
+      setBankApplyForm((prev) => ({
+        ...prev,
+        counterpartyId: String(counterpartyId),
+      }));
+      setBankApplyCounterpartyLookupQuery("");
+      setBankApplyInlineCounterpartyMessage(
+        `Counterparty created and selected. counterpartyId=${counterpartyId}`
+      );
+    } catch (error) {
+      setBankApplyInlineCounterpartyError(
+        normalizeUiError(error, "Failed to create counterparty from lookup.")
+      );
+    } finally {
+      setBankApplyInlineCounterpartySaving(false);
+    }
+  }
+
   async function onApply(form = applyForm) {
     setApplyError("");
     setApplyMessage("");
@@ -1234,21 +1365,51 @@ export default function CariSettlementsPage() {
             )}
           </label>
           {canReadCards ? (
-            <label className="text-xs font-semibold uppercase tracking-wide text-slate-600">
-              Counterparty Lookup
-              <Combobox
-                className="mt-1"
-                value={applyForm.counterpartyId}
-                options={counterpartyLookupOptions}
-                loading={counterpartyLoading}
-                disabled={!canApply || !toPositiveInt(applyForm.legalEntityId)}
-                placeholder={toPositiveInt(applyForm.legalEntityId) ? "Type code/name" : "Select legal entity first"}
-                noOptionsText={toPositiveInt(applyForm.legalEntityId) ? "No counterparties found." : "Set legalEntityId to load counterparties."}
-                onChange={(nextValue) =>
-                  updateApplyForm("counterpartyId", nextValue ? String(nextValue) : "")
-                }
-              />
-            </label>
+            <div className="text-xs font-semibold uppercase tracking-wide text-slate-600">
+              <label className="block">
+                Counterparty Lookup
+                <Combobox
+                  className="mt-1"
+                  value={applyForm.counterpartyId}
+                  options={counterpartyLookupOptions}
+                  loading={counterpartyLoading}
+                  disabled={!canApply || !toPositiveInt(applyForm.legalEntityId)}
+                  placeholder={toPositiveInt(applyForm.legalEntityId) ? "Type code/name" : "Select legal entity first"}
+                  noOptionsText={toPositiveInt(applyForm.legalEntityId) ? "No counterparties found." : "Set legalEntityId to load counterparties."}
+                  onInputChange={(nextValue, meta) => {
+                    setApplyInlineCounterpartyError("");
+                    setApplyInlineCounterpartyMessage("");
+                    const reason = String(meta?.reason || "").trim().toLowerCase();
+                    if (reason === "select" || reason === "clear") {
+                      setApplyCounterpartyLookupQuery("");
+                      return;
+                    }
+                    setApplyCounterpartyLookupQuery(normalizeLookupQuery(nextValue));
+                  }}
+                  onChange={(nextValue) =>
+                    updateApplyForm("counterpartyId", nextValue ? String(nextValue) : "")
+                  }
+                />
+              </label>
+              {canUpsertCards ? (
+                <button
+                  type="button"
+                  className="mt-2 rounded-md border border-slate-300 bg-white px-2.5 py-1 text-[11px] font-semibold normal-case text-slate-700 disabled:opacity-60"
+                  onClick={handleInlineCreateCounterpartyForApplyForm}
+                  disabled={!canInlineCreateCounterpartyInApplyForm || applyInlineCounterpartySaving}
+                >
+                  {applyInlineCounterpartySaving
+                    ? "Creating counterparty..."
+                    : `Create "${applyInlineCounterpartyName || "new counterparty"}"`}
+                </button>
+              ) : null}
+              {applyInlineCounterpartyError ? (
+                <p className="mt-1 text-[11px] normal-case text-rose-700">{applyInlineCounterpartyError}</p>
+              ) : null}
+              {applyInlineCounterpartyMessage ? (
+                <p className="mt-1 text-[11px] normal-case text-emerald-700">{applyInlineCounterpartyMessage}</p>
+              ) : null}
+            </div>
           ) : null}
           <label className="text-xs font-semibold uppercase tracking-wide text-slate-600">
             Direction
@@ -1713,6 +1874,9 @@ export default function CariSettlementsPage() {
                 setApplyReplayMessage("");
                 setApplyResult(null);
                 setApplyFollowUpRisks([]);
+                setApplyCounterpartyLookupQuery("");
+                setApplyInlineCounterpartyError("");
+                setApplyInlineCounterpartyMessage("");
                 setLinkedCashForm(buildLinkedCashDefaultForm());
                 setLinkedCashError("");
                 setLinkedCashMessage("");
@@ -2158,24 +2322,54 @@ export default function CariSettlementsPage() {
             />
           </label>
           {canReadCards ? (
-            <label className="text-xs font-semibold uppercase tracking-wide text-slate-600 md:col-span-2">
-              counterpartyLookup
-              <Combobox
-                className="mt-1"
-                value={bankApplyForm.counterpartyId}
-                options={bankApplyCounterpartyLookupOptions}
-                loading={bankApplyCounterpartyLoading}
-                disabled={!canBankApply || bankApplySubmitting || !toPositiveInt(bankApplyForm.legalEntityId)}
-                placeholder={toPositiveInt(bankApplyForm.legalEntityId) ? "Type code/name" : "Select legal entity first"}
-                noOptionsText={toPositiveInt(bankApplyForm.legalEntityId) ? "No counterparties found." : "Set legalEntityId to load counterparties."}
-                onChange={(nextValue) =>
-                  setBankApplyForm((prev) => ({
-                    ...prev,
-                    counterpartyId: nextValue ? String(nextValue) : "",
-                  }))
-                }
-              />
-            </label>
+            <div className="text-xs font-semibold uppercase tracking-wide text-slate-600 md:col-span-2">
+              <label className="block">
+                counterpartyLookup
+                <Combobox
+                  className="mt-1"
+                  value={bankApplyForm.counterpartyId}
+                  options={bankApplyCounterpartyLookupOptions}
+                  loading={bankApplyCounterpartyLoading}
+                  disabled={!canBankApply || bankApplySubmitting || !toPositiveInt(bankApplyForm.legalEntityId)}
+                  placeholder={toPositiveInt(bankApplyForm.legalEntityId) ? "Type code/name" : "Select legal entity first"}
+                  noOptionsText={toPositiveInt(bankApplyForm.legalEntityId) ? "No counterparties found." : "Set legalEntityId to load counterparties."}
+                  onInputChange={(nextValue, meta) => {
+                    setBankApplyInlineCounterpartyError("");
+                    setBankApplyInlineCounterpartyMessage("");
+                    const reason = String(meta?.reason || "").trim().toLowerCase();
+                    if (reason === "select" || reason === "clear") {
+                      setBankApplyCounterpartyLookupQuery("");
+                      return;
+                    }
+                    setBankApplyCounterpartyLookupQuery(normalizeLookupQuery(nextValue));
+                  }}
+                  onChange={(nextValue) =>
+                    setBankApplyForm((prev) => ({
+                      ...prev,
+                      counterpartyId: nextValue ? String(nextValue) : "",
+                    }))
+                  }
+                />
+              </label>
+              {canUpsertCards ? (
+                <button
+                  type="button"
+                  className="mt-2 rounded-md border border-slate-300 bg-white px-2.5 py-1 text-[11px] font-semibold normal-case text-slate-700 disabled:opacity-60"
+                  onClick={handleInlineCreateCounterpartyForBankApplyForm}
+                  disabled={!canInlineCreateCounterpartyInBankApplyForm || bankApplyInlineCounterpartySaving || bankApplySubmitting}
+                >
+                  {bankApplyInlineCounterpartySaving
+                    ? "Creating counterparty..."
+                    : `Create "${bankApplyInlineCounterpartyName || "new counterparty"}"`}
+                </button>
+              ) : null}
+              {bankApplyInlineCounterpartyError ? (
+                <p className="mt-1 text-[11px] normal-case text-rose-700">{bankApplyInlineCounterpartyError}</p>
+              ) : null}
+              {bankApplyInlineCounterpartyMessage ? (
+                <p className="mt-1 text-[11px] normal-case text-emerald-700">{bankApplyInlineCounterpartyMessage}</p>
+              ) : null}
+            </div>
           ) : null}
           <label className="text-xs font-semibold uppercase tracking-wide text-slate-600">
             direction

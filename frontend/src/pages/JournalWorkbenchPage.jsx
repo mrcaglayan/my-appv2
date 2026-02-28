@@ -558,7 +558,7 @@ export default function JournalWorkbenchPage() {
     return () => {
       cancelled = true;
     };
-  }, [canReadPeriods, books, historyFilters.bookId, l]);
+  }, [canReadPeriods, books, historyFilters.bookId, l, setHistoryFilters]);
 
   async function fetchJournalHistory(filters = historyFilters) {
     if (!canReadJournals) return;

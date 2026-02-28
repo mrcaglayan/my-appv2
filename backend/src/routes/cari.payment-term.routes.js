@@ -6,11 +6,13 @@ import {
 } from "../middleware/rbac.js";
 import { asyncHandler, parsePositiveInt } from "./_utils.js";
 import {
+  parsePaymentTermCreateInput,
   parsePaymentTermIdParam,
   parsePaymentTermReadFilters,
 } from "./cari.payment-term.validators.js";
 import { requireTenantId } from "./cash.validators.common.js";
 import {
+  createPaymentTerm,
   getPaymentTermByIdForTenant,
   listPaymentTerms,
   resolvePaymentTermScope,
@@ -41,6 +43,31 @@ router.get(
     return res.json({
       tenantId: filters.tenantId,
       ...result,
+    });
+  })
+);
+
+router.post(
+  "/",
+  requirePermission("cari.card.upsert", {
+    resolveScope: async (req) => {
+      const legalEntityId = parsePositiveInt(req.body?.legalEntityId);
+      if (legalEntityId) {
+        return { scopeType: "LEGAL_ENTITY", scopeId: legalEntityId };
+      }
+      return null;
+    },
+  }),
+  asyncHandler(async (req, res) => {
+    const payload = parsePaymentTermCreateInput(req);
+    const row = await createPaymentTerm({
+      req,
+      payload,
+      assertScopeAccess,
+    });
+    return res.status(201).json({
+      tenantId: payload.tenantId,
+      row,
     });
   })
 );

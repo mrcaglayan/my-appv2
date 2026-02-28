@@ -6,8 +6,14 @@ import {
   openCashSession,
 } from "../../api/cashAdmin.js";
 import { useAuth } from "../../auth/useAuth.js";
+import StatusTimeline from "../../components/StatusTimeline.jsx";
 import { useToastMessage } from "../../hooks/useToastMessage.js";
 import { useI18n } from "../../i18n/useI18n.js";
+import {
+  buildLifecycleTimelineSteps,
+  getLifecycleAllowedActions,
+  getLifecycleStatusMeta,
+} from "../../lifecycle/lifecycleRules.js";
 import CashControlModeBanner from "./CashControlModeBanner.jsx";
 
 const CLOSE_REASONS = ["END_SHIFT", "FORCED_CLOSE", "COUNT_CORRECTION"];
@@ -49,6 +55,49 @@ function formatDateTime(value) {
     return String(value);
   }
   return `${date.toLocaleDateString()} ${date.toLocaleTimeString()}`;
+}
+
+function buildCashSessionLifecycleEvents(row) {
+  if (!row) {
+    return [];
+  }
+
+  const status = toUpper(row?.status);
+  const openedAt = row?.opened_at || row?.openedAt || null;
+  const closedAt = row?.closed_at || row?.closedAt || null;
+  const updatedAt = row?.updated_at || row?.updatedAt || null;
+  const openedBy =
+    String(row?.opened_by_email || "").trim() ||
+    (toPositiveInt(row?.opened_by_user_id) ? `User #${row.opened_by_user_id}` : null);
+  const closedBy =
+    String(row?.closed_by_email || "").trim() ||
+    String(row?.approved_by_email || "").trim() ||
+    (toPositiveInt(row?.closed_by_user_id)
+      ? `User #${row.closed_by_user_id}`
+      : toPositiveInt(row?.approved_by_user_id)
+        ? `User #${row.approved_by_user_id}`
+        : null);
+  const closeReason = String(row?.closed_reason || row?.closedReason || "").trim();
+  const closeNote = String(row?.close_note || row?.closeNote || "").trim();
+
+  const events = [];
+  if (openedAt) {
+    events.push({
+      statusCode: "OPEN",
+      at: openedAt,
+      actorName: openedBy,
+    });
+  }
+  if (status === "CLOSED") {
+    events.push({
+      statusCode: "CLOSED",
+      at: closedAt || updatedAt || openedAt,
+      actorName: closedBy,
+      note: [closeReason, closeNote].filter(Boolean).join(" | ") || null,
+    });
+  }
+
+  return events;
 }
 
 function normalizeErrorMessage(value) {
@@ -126,6 +175,19 @@ function toSessionErrorState(err, t, fallbackKey) {
 export default function CashSessionsPage() {
   const { hasPermission } = useAuth();
   const { t } = useI18n();
+  const localizeSessionStatus = (status) => {
+    const normalized = toUpper(status);
+    if (!normalized) {
+      return "-";
+    }
+    if (normalized === "OPEN") {
+      return t("cashSessions.values.statusOpen");
+    }
+    if (normalized === "CLOSED") {
+      return t("cashSessions.values.statusClosed");
+    }
+    return normalized;
+  };
 
   const canRead = hasPermission("cash.register.read");
   const canOpen = hasPermission("cash.session.open");
@@ -154,6 +216,7 @@ export default function CashSessionsPage() {
     closeNote: "",
     approveVariance: false,
   });
+  const [selectedLifecycleSessionId, setSelectedLifecycleSessionId] = useState(null);
 
   const openableRegisters = useMemo(() => {
     return [...registers]
@@ -202,6 +265,41 @@ export default function CashSessionsPage() {
     }
     return openSessions.find((row) => toPositiveInt(row?.id) === sessionId) || null;
   }, [closeForm.sessionId, openSessions]);
+  const selectedLifecycleSession = useMemo(() => {
+    const sessionId = toPositiveInt(selectedLifecycleSessionId || closeForm.sessionId);
+    if (!sessionId) {
+      return null;
+    }
+    return (
+      [...openSessions, ...historyRows].find((row) => toPositiveInt(row?.id) === sessionId) ||
+      null
+    );
+  }, [closeForm.sessionId, historyRows, openSessions, selectedLifecycleSessionId]);
+  const selectedSessionLifecycleMeta = useMemo(
+    () => getLifecycleStatusMeta("cashSession", selectedLifecycleSession?.status),
+    [selectedLifecycleSession?.status]
+  );
+  const selectedSessionLifecycleActions = useMemo(
+    () => getLifecycleAllowedActions("cashSession", selectedLifecycleSession?.status),
+    [selectedLifecycleSession?.status]
+  );
+  const selectedSessionLifecycleActionLabels = useMemo(() => {
+    const labelsByAction = {
+      close: t("cashSessions.lifecycle.actionLabels.close"),
+    };
+    return selectedSessionLifecycleActions.map(
+      (row) => labelsByAction[row.action] || row.label
+    );
+  }, [selectedSessionLifecycleActions, t]);
+  const selectedSessionLifecycleTimeline = useMemo(
+    () =>
+      buildLifecycleTimelineSteps(
+        "cashSession",
+        selectedLifecycleSession?.status,
+        buildCashSessionLifecycleEvents(selectedLifecycleSession)
+      ),
+    [selectedLifecycleSession]
+  );
 
   async function loadData() {
     if (!canRead) {
@@ -271,6 +369,26 @@ export default function CashSessionsPage() {
     loadData();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [canRead]);
+
+  useEffect(() => {
+    const closeSessionId = toPositiveInt(closeForm.sessionId);
+    if (closeSessionId) {
+      setSelectedLifecycleSessionId(String(closeSessionId));
+    }
+  }, [closeForm.sessionId]);
+
+  useEffect(() => {
+    const selectedId = toPositiveInt(selectedLifecycleSessionId);
+    if (!selectedId) {
+      return;
+    }
+    const found = [...openSessions, ...historyRows].some(
+      (row) => toPositiveInt(row?.id) === selectedId
+    );
+    if (!found) {
+      setSelectedLifecycleSessionId(null);
+    }
+  }, [historyRows, openSessions, selectedLifecycleSessionId]);
 
   async function handleOpenSession(event) {
     event.preventDefault();
@@ -390,6 +508,7 @@ export default function CashSessionsPage() {
     if (!sessionId) {
       return;
     }
+    setSelectedLifecycleSessionId(String(sessionId));
     setCloseForm((prev) => ({
       ...prev,
       sessionId: String(sessionId),
@@ -618,6 +737,54 @@ export default function CashSessionsPage() {
       </section>
 
       <section className="rounded-xl border border-slate-200 bg-white p-4">
+        <h2 className="mb-3 text-sm font-semibold text-slate-700">
+          {t("cashSessions.sections.lifecycle")}
+        </h2>
+        {selectedLifecycleSession ? (
+          <div className="grid gap-3 md:grid-cols-2">
+            <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-700">
+                {t("cashSessions.lifecycle.snapshotTitle")}
+              </p>
+              <p className="mt-1 text-sm font-semibold text-slate-900">
+                {t("cashSessions.lifecycle.selectedSummary", {
+                  id: selectedLifecycleSession.id || "-",
+                  registerCode:
+                    selectedLifecycleSession.cash_register_code ||
+                    selectedLifecycleSession.cash_register_id ||
+                    "-",
+                  status: localizeSessionStatus(selectedLifecycleSession.status),
+                })}
+              </p>
+              {selectedSessionLifecycleMeta?.description ? (
+                <p className="mt-1 text-sm text-slate-700">
+                  {selectedSessionLifecycleMeta.description}
+                </p>
+              ) : null}
+              {selectedSessionLifecycleActionLabels.length > 0 ? (
+                <p className="mt-1 text-xs text-slate-600">
+                  {t("cashSessions.lifecycle.nextTransitions", {
+                    actions: selectedSessionLifecycleActionLabels.join(", "),
+                  })}
+                </p>
+              ) : (
+                <p className="mt-1 text-xs text-slate-500">
+                  {t("cashSessions.lifecycle.noTransitions")}
+                </p>
+              )}
+            </div>
+            <StatusTimeline
+              title={t("cashSessions.lifecycle.timelineTitle")}
+              steps={selectedSessionLifecycleTimeline}
+              emptyText={t("cashSessions.lifecycle.timelineEmpty")}
+            />
+          </div>
+        ) : (
+          <p className="text-sm text-slate-500">{t("cashSessions.lifecycle.noSelection")}</p>
+        )}
+      </section>
+
+      <section className="rounded-xl border border-slate-200 bg-white p-4">
         <div className="mb-3 flex items-center justify-between gap-2">
           <h2 className="text-sm font-semibold text-slate-700">
             {t("cashSessions.sections.openSessions")}
@@ -649,13 +816,20 @@ export default function CashSessionsPage() {
             </thead>
             <tbody>
               {openSessions.map((row) => (
-                <tr key={`open-session-row-${row.id}`} className="border-t border-slate-100">
+                <tr
+                  key={`open-session-row-${row.id}`}
+                  className={`border-t border-slate-100 ${
+                    toPositiveInt(row.id) === toPositiveInt(selectedLifecycleSessionId)
+                      ? "bg-cyan-50"
+                      : ""
+                  }`}
+                >
                   <td className="px-3 py-2">{row.id}</td>
                   <td className="px-3 py-2">
                     {(row.cash_register_code || row.cash_register_id) + " - " +
                       (row.cash_register_name || "-")}
                   </td>
-                  <td className="px-3 py-2">{row.status}</td>
+                  <td className="px-3 py-2">{localizeSessionStatus(row.status)}</td>
                   <td className="px-3 py-2">{formatDateTime(row.opened_at)}</td>
                   <td className="px-3 py-2">{formatAmount(row.opening_amount)}</td>
                   <td className="px-3 py-2">
@@ -679,17 +853,24 @@ export default function CashSessionsPage() {
                       : formatAmount(row.variance_amount)}
                   </td>
                   <td className="px-3 py-2">
-                    {canClose ? (
+                    <div className="flex flex-wrap gap-1">
+                      {canClose ? (
+                        <button
+                          type="button"
+                          onClick={() => selectSessionForClose(row)}
+                          className="rounded-md border border-cyan-300 px-2 py-1 text-xs font-semibold text-cyan-700 hover:bg-cyan-50"
+                        >
+                          {t("cashSessions.actions.useForClose")}
+                        </button>
+                      ) : null}
                       <button
                         type="button"
-                        onClick={() => selectSessionForClose(row)}
-                        className="rounded-md border border-cyan-300 px-2 py-1 text-xs font-semibold text-cyan-700 hover:bg-cyan-50"
+                        onClick={() => setSelectedLifecycleSessionId(String(row.id))}
+                        className="rounded-md border border-slate-300 px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50"
                       >
-                        {t("cashSessions.actions.useForClose")}
+                        {t("cashSessions.actions.inspectLifecycle")}
                       </button>
-                    ) : (
-                      <span className="text-slate-400">-</span>
-                    )}
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -726,17 +907,25 @@ export default function CashSessionsPage() {
                 <th className="px-3 py-2">{t("cashSessions.table.closedReason")}</th>
                 <th className="px-3 py-2">{t("cashSessions.table.approvedBy")}</th>
                 <th className="px-3 py-2">{t("cashSessions.table.approvedAt")}</th>
+                <th className="px-3 py-2">{t("cashSessions.table.actions")}</th>
               </tr>
             </thead>
             <tbody>
               {historyRows.map((row) => (
-                <tr key={`session-history-row-${row.id}`} className="border-t border-slate-100">
+                <tr
+                  key={`session-history-row-${row.id}`}
+                  className={`border-t border-slate-100 ${
+                    toPositiveInt(row.id) === toPositiveInt(selectedLifecycleSessionId)
+                      ? "bg-cyan-50"
+                      : ""
+                  }`}
+                >
                   <td className="px-3 py-2">{row.id}</td>
                   <td className="px-3 py-2">
                     {(row.cash_register_code || row.cash_register_id) + " - " +
                       (row.cash_register_name || "-")}
                   </td>
-                  <td className="px-3 py-2">{row.status}</td>
+                  <td className="px-3 py-2">{localizeSessionStatus(row.status)}</td>
                   <td className="px-3 py-2">{formatDateTime(row.opened_at)}</td>
                   <td className="px-3 py-2">{formatDateTime(row.closed_at)}</td>
                   <td className="px-3 py-2">{formatAmount(row.opening_amount)}</td>
@@ -769,11 +958,20 @@ export default function CashSessionsPage() {
                   <td className="px-3 py-2">
                     {formatDateTime(row.approved_at || row.approvedAt)}
                   </td>
+                  <td className="px-3 py-2">
+                    <button
+                      type="button"
+                      onClick={() => setSelectedLifecycleSessionId(String(row.id))}
+                      className="rounded-md border border-slate-300 px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                    >
+                      {t("cashSessions.actions.inspectLifecycle")}
+                    </button>
+                  </td>
                 </tr>
               ))}
               {!loading && historyRows.length === 0 ? (
                 <tr>
-                  <td colSpan={12} className="px-3 py-3 text-slate-500">
+                  <td colSpan={13} className="px-3 py-3 text-slate-500">
                     {t("cashSessions.emptyHistory")}
                   </td>
                 </tr>

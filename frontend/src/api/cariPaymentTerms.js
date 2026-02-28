@@ -17,3 +17,7 @@ export async function listCariPaymentTerms(params = {}) {
 export async function getCariPaymentTerm(paymentTermId) {
   return run(() => api.get(`/api/v1/cari/payment-terms/${paymentTermId}`));
 }
+
+export async function createCariPaymentTerm(payload) {
+  return run(() => api.post("/api/v1/cari/payment-terms", payload));
+}
