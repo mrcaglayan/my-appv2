@@ -13,6 +13,17 @@ function toPositiveInt(value) {
   return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
 }
 
+function formatDateTime(value) {
+  if (!value) {
+    return "-";
+  }
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return String(value);
+  }
+  return parsed.toLocaleString();
+}
+
 const SAMPLE_CSV = [
   "txn_date,value_date,description,reference_no,amount,currency_code,balance_after",
   "2026-02-01,2026-02-01,Havale gelisi,REF-001,15000.00,TRY,15000.00",

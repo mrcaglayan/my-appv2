@@ -15,6 +15,7 @@ import { listCariCounterparties } from "../../api/cariCounterparty.js";
 import { listLegalEntities } from "../../api/orgAdmin.js";
 import { getCariOpenItemsReport } from "../../api/cariReports.js";
 import { extractCariReplayAndRisks } from "../../api/cariCommon.js";
+import Combobox from "../../components/Combobox.jsx";
 import { useAuth } from "../../auth/useAuth.js";
 import { useWorkingContextDefaults } from "../../context/useWorkingContextDefaults.js";
 import { usePersistedFilters } from "../../hooks/usePersistedFilters.js";
@@ -53,6 +54,25 @@ function toUpper(value) {
 function toPositiveInt(value) {
   const parsed = Number(value);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
+function resolveCounterpartyRoleFromDirection(direction) {
+  const normalized = toUpper(direction);
+  if (normalized === "AR") return "CUSTOMER";
+  if (normalized === "AP") return "VENDOR";
+  return undefined;
+}
+
+function mapCounterpartyLookupOption(row) {
+  const id = toPositiveInt(row?.id);
+  const code = String(row?.code || id || "").trim();
+  const name = String(row?.name || "").trim();
+  const counterpartyType = toUpper(row?.counterpartyType || "OTHER");
+  return {
+    value: id ? String(id) : "",
+    label: name ? `${code || id} - ${name}` : String(code || id || "-"),
+    description: counterpartyType || "OTHER",
+  };
 }
 
 function toPositiveDecimal(value) {
@@ -277,6 +297,9 @@ export default function CariSettlementsPage() {
   const [linkedCashResult, setLinkedCashResult] = useState(null);
   const [legalEntities, setLegalEntities] = useState([]);
   const [counterpartyOptions, setCounterpartyOptions] = useState([]);
+  const [counterpartyLoading, setCounterpartyLoading] = useState(false);
+  const [bankApplyCounterpartyOptions, setBankApplyCounterpartyOptions] = useState([]);
+  const [bankApplyCounterpartyLoading, setBankApplyCounterpartyLoading] = useState(false);
   const [lookupWarning, setLookupWarning] = useState("");
   const [cashRegisterOptions, setCashRegisterOptions] = useState([]);
   const [openCashSessions, setOpenCashSessions] = useState([]);
@@ -375,6 +398,17 @@ export default function CariSettlementsPage() {
         return allowPosting && isActive;
       }),
     [applyForm.legalEntityId, cashAccountOptions]
+  );
+  const counterpartyLookupOptions = useMemo(
+    () => (counterpartyOptions || []).map(mapCounterpartyLookupOption).filter((row) => row.value),
+    [counterpartyOptions]
+  );
+  const bankApplyCounterpartyLookupOptions = useMemo(
+    () =>
+      (bankApplyCounterpartyOptions || [])
+        .map(mapCounterpartyLookupOption)
+        .filter((row) => row.value),
+    [bankApplyCounterpartyOptions]
   );
 
   const applyIntentScope = useMemo(
@@ -510,23 +544,21 @@ export default function CariSettlementsPage() {
   useEffect(() => {
     if (!canReadCards) {
       setCounterpartyOptions([]);
+      setCounterpartyLoading(false);
       return;
     }
     const legalEntityId = toPositiveInt(applyForm.legalEntityId);
     if (!legalEntityId) {
       setCounterpartyOptions([]);
+      setCounterpartyLoading(false);
       return;
     }
 
-    const role =
-      toUpper(applyForm.direction) === "AR"
-        ? "CUSTOMER"
-        : toUpper(applyForm.direction) === "AP"
-          ? "VENDOR"
-          : undefined;
+    const role = resolveCounterpartyRoleFromDirection(applyForm.direction);
 
     let active = true;
     async function loadCounterpartyRows() {
+      setCounterpartyLoading(true);
       try {
         const response = await listCariCounterparties({
           legalEntityId,
@@ -546,6 +578,10 @@ export default function CariSettlementsPage() {
           return;
         }
         setCounterpartyOptions([]);
+      } finally {
+        if (active) {
+          setCounterpartyLoading(false);
+        }
       }
     }
 
@@ -554,6 +590,55 @@ export default function CariSettlementsPage() {
       active = false;
     };
   }, [applyForm.direction, applyForm.legalEntityId, canReadCards]);
+
+  useEffect(() => {
+    if (!canReadCards) {
+      setBankApplyCounterpartyOptions([]);
+      setBankApplyCounterpartyLoading(false);
+      return;
+    }
+    const legalEntityId = toPositiveInt(bankApplyForm.legalEntityId);
+    if (!legalEntityId) {
+      setBankApplyCounterpartyOptions([]);
+      setBankApplyCounterpartyLoading(false);
+      return;
+    }
+
+    const role = resolveCounterpartyRoleFromDirection(bankApplyForm.direction);
+    let active = true;
+    async function loadBankApplyCounterpartyRows() {
+      setBankApplyCounterpartyLoading(true);
+      try {
+        const response = await listCariCounterparties({
+          legalEntityId,
+          role,
+          status: "ACTIVE",
+          sortBy: "NAME",
+          sortDir: "ASC",
+          limit: 300,
+          offset: 0,
+        });
+        if (!active) {
+          return;
+        }
+        setBankApplyCounterpartyOptions(Array.isArray(response?.rows) ? response.rows : []);
+      } catch {
+        if (!active) {
+          return;
+        }
+        setBankApplyCounterpartyOptions([]);
+      } finally {
+        if (active) {
+          setBankApplyCounterpartyLoading(false);
+        }
+      }
+    }
+
+    loadBankApplyCounterpartyRows();
+    return () => {
+      active = false;
+    };
+  }, [bankApplyForm.direction, bankApplyForm.legalEntityId, canReadCards]);
 
   useEffect(() => {
     if (!linkedCashForm.createLinkedCashTransaction) {
@@ -1058,6 +1143,23 @@ export default function CariSettlementsPage() {
               />
             )}
           </label>
+          {canReadCards ? (
+            <label className="text-xs font-semibold uppercase tracking-wide text-slate-600">
+              Counterparty Lookup
+              <Combobox
+                className="mt-1"
+                value={applyForm.counterpartyId}
+                options={counterpartyLookupOptions}
+                loading={counterpartyLoading}
+                disabled={!canApply || !toPositiveInt(applyForm.legalEntityId)}
+                placeholder={toPositiveInt(applyForm.legalEntityId) ? "Type code/name" : "Select legal entity first"}
+                noOptionsText={toPositiveInt(applyForm.legalEntityId) ? "No counterparties found." : "Set legalEntityId to load counterparties."}
+                onChange={(nextValue) =>
+                  updateApplyForm("counterpartyId", nextValue ? String(nextValue) : "")
+                }
+              />
+            </label>
+          ) : null}
           <label className="text-xs font-semibold uppercase tracking-wide text-slate-600">
             Direction
             <select
@@ -1947,6 +2049,26 @@ export default function CariSettlementsPage() {
               required
             />
           </label>
+          {canReadCards ? (
+            <label className="text-xs font-semibold uppercase tracking-wide text-slate-600 md:col-span-2">
+              counterpartyLookup
+              <Combobox
+                className="mt-1"
+                value={bankApplyForm.counterpartyId}
+                options={bankApplyCounterpartyLookupOptions}
+                loading={bankApplyCounterpartyLoading}
+                disabled={!canBankApply || bankApplySubmitting || !toPositiveInt(bankApplyForm.legalEntityId)}
+                placeholder={toPositiveInt(bankApplyForm.legalEntityId) ? "Type code/name" : "Select legal entity first"}
+                noOptionsText={toPositiveInt(bankApplyForm.legalEntityId) ? "No counterparties found." : "Set legalEntityId to load counterparties."}
+                onChange={(nextValue) =>
+                  setBankApplyForm((prev) => ({
+                    ...prev,
+                    counterpartyId: nextValue ? String(nextValue) : "",
+                  }))
+                }
+              />
+            </label>
+          ) : null}
           <label className="text-xs font-semibold uppercase tracking-wide text-slate-600">
             direction
             <select

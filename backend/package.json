@@ -67,6 +67,7 @@
     "test:hardening:prh09": "node scripts/test-hardening-prh09-tenant-entity-isolation.js",
     "test:ux:prux09": "node scripts/test-ux-prux09-exception-bulk-actions.js",
     "test:ux:prux10": "node scripts/test-ux-prux10-shared-combobox.js",
+    "test:ux:prux11": "node scripts/test-ux-prux11-counterparty-typeahead.js",
     "test:e2e:bank-payroll": "node scripts/test-e2e-bank-payroll-release-gate.js",
     "test:cari-pr01": "node scripts/test-cari-pr01-schema-and-constraints.js",
     "test:cari-pr02": "node scripts/test-cari-pr02-rbac-seed-and-guards.js",
