@@ -1,0 +1,106 @@
+name: backend-release-gate
+
+on:
+  pull_request:
+    branches:
+      - main
+  merge_group:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      release_gate_only_stages:
+        description: "Optional CSV stage filter (e.g. CORE,BANK_PAYROLL)"
+        required: false
+        default: ""
+      release_gate_skip_stages:
+        description: "Optional CSV stages to skip (e.g. INTEGRATION_PRI06)"
+        required: false
+        default: ""
+      skip_core:
+        description: "Skip CORE stage"
+        required: false
+        default: "false"
+      skip_contracts_revenue:
+        description: "Skip CONTRACTS_REVENUE stage"
+        required: false
+        default: "false"
+      skip_bank_payroll:
+        description: "Skip BANK_PAYROLL stage"
+        required: false
+        default: "false"
+      skip_integration_pri06:
+        description: "Skip INTEGRATION_PRI06 stage"
+        required: false
+        default: "false"
+      release_gate_dry_run:
+        description: "Dry run unified gate (print selected stages only)"
+        required: false
+        default: "false"
+
+jobs:
+  backend-release-gate:
+    name: backend-release-gate
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: saap_ci
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -proot --silent"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+    env:
+      DB_HOST: 127.0.0.1
+      DB_PORT: 3306
+      DB_USER: root
+      DB_PASSWORD: root
+      DB_NAME: saap_ci
+      JWT_SECRET: ci-test-secret
+      CORS_ORIGIN: http://localhost:5173,http://127.0.0.1:5173
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install backend dependencies
+        run: npm ci
+        working-directory: backend
+
+      - name: Wait for MySQL
+        run: |
+          for i in {1..30}; do
+            mysqladmin ping -h 127.0.0.1 -uroot -proot --silent && exit 0
+            echo "Waiting for MySQL..."
+            sleep 2
+          done
+          echo "MySQL did not become ready in time"
+          exit 1
+
+      - name: Run migrations
+        run: npm run db:migrate
+        working-directory: backend
+
+      - name: Run unified release gate tests
+        env:
+          RELEASE_GATE_ONLY_STAGES: ${{ github.event.inputs.release_gate_only_stages || '' }}
+          RELEASE_GATE_SKIP_STAGES: ${{ github.event.inputs.release_gate_skip_stages || '' }}
+          RELEASE_GATE_SKIP_CORE: ${{ github.event.inputs.skip_core || 'false' }}
+          RELEASE_GATE_SKIP_CONTRACTS_REVENUE: ${{ github.event.inputs.skip_contracts_revenue || 'false' }}
+          RELEASE_GATE_SKIP_BANK_PAYROLL: ${{ github.event.inputs.skip_bank_payroll || 'false' }}
+          RELEASE_GATE_SKIP_INTEGRATION_PRI06: ${{ github.event.inputs.skip_integration_pri06 || 'false' }}
+          RELEASE_GATE_DRY_RUN: ${{ github.event.inputs.release_gate_dry_run || 'false' }}
+        run: npm run test:release-gate
+        working-directory: backend

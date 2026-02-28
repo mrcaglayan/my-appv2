@@ -1,0 +1,12 @@
+[
+    {
+        "code": "NET_30",
+        "name": "Net 30",
+        "dueDays": 30
+    },
+    {
+        "code": "NET_60",
+        "name": "Net 60",
+        "dueDays": 60
+    }
+]

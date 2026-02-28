@@ -1,0 +1,20 @@
+
+
+check the steps in 04-BANKS_AND_PAYROLLS_ESM.md
+since all been implemented check if there is anything that suggested something like that
+ " it will be implemented after applying that steps etc, since all steps been applied so 
+ we can apply that skipped ones if exist "
+
+
+now start implementing the next step  from 04-BANKS_AND_PAYROLLS_ESM.md, don't forget the global rules.  
+read the file all first then start implementing cuz you might find some useful notes. 
+Execution Tracker (Update As You Implement)
+
+now check the application of banks and payrolls modules is there any points to be needs improvements.
+
+
+
+now we have implemented  all steps in 04-BANKS_AND_PAYROLLS_ESM.md, and prepare manual ( kullanım kılavuzu ) for bank 
+and payrol modules, example case usaages, in detail for users who has no coding knowledge. so it should be detailed
+and explicit explanatory, which options for what which one to choose which one not to chose, and in those cases
+what happens etc. 

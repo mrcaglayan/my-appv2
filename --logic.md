@@ -1,0 +1,8 @@
+-Çok uluslu firmalar.
+-Her ülke kendine ait hesap planı , kdv , vergi vs sistemleri farklı olabilir ki öyle. 
+-bütün ülkelerin konsolide edilmesi.
+-her ülkelerde çok uluslu firmaya ait ülkelerde ülke heardquarterları ve bu headquarterlara bağlı birimler ( şubeler var)
+-şube hareteleri bölge sorumlusunun kontrolünedne geçiyor
+- sonra en stte büttün ülkelerden sorumlu kişilerin kontrolünden ve onyaından geçiyor.
+-ondan sonra konsolide edilebiillyor
+-

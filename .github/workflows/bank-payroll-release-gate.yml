@@ -1,0 +1,73 @@
+name: bank-payroll-release-gate
+
+on:
+  pull_request:
+    branches:
+      - main
+  merge_group:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  bank-payroll-release-gate:
+    name: bank-payroll-release-gate
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: saap_ci
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -proot --silent"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=15
+    env:
+      DB_HOST: 127.0.0.1
+      DB_PORT: 3306
+      DB_USER: root
+      DB_PASSWORD: root
+      DB_NAME: saap_ci
+      JWT_SECRET: ci-test-secret
+      CORS_ORIGIN: http://localhost:5173,http://127.0.0.1:5173
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install backend dependencies
+        run: npm ci
+        working-directory: backend
+
+      - name: Wait for MySQL
+        run: |
+          for i in {1..40}; do
+            mysqladmin ping -h 127.0.0.1 -uroot -proot --silent && exit 0
+            echo "Waiting for MySQL..."
+            sleep 2
+          done
+          echo "MySQL did not become ready in time"
+          exit 1
+
+      - name: Run migrations
+        run: npm run db:migrate
+        working-directory: backend
+
+      - name: Seed core users/permissions
+        run: npm run db:seed:core && npm run db:seed:provider-admin
+        working-directory: backend
+
+      - name: Run bank-payroll release gate
+        run: npm run test:e2e:bank-payroll
+        working-directory: backend

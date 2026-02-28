@@ -1,0 +1,413 @@
+Frontend Cash Delivery Plan (Backend-Aligned)
+=============================================
+
+Status: Updated after backend contract review (with frontend integration corrections)
+Date: 2026-02-22
+
+
+1) Backend Reality Check
+------------------------
+
+Available API namespaces:
+- /api/v1/cash/registers
+- /api/v1/cash/sessions
+- /api/v1/cash/transactions
+
+Current backend supports:
+- Register list/get/upsert/status
+- Session list/get/open/close (with variance logic)
+- Transaction list/get/create/post/cancel/reverse
+
+Current backend does NOT expose dedicated endpoints for:
+- Cash balances summary endpoint
+- Cash movements summary endpoint
+- Cash exceptions/monitoring endpoint
+- Rollout mode/config endpoint for frontend
+- Structured error "code" in global error responses
+
+Important contract constraints already active:
+- Transaction create requires idempotencyKey.
+- Session close requires countedClosingAmount.
+- Session close above threshold requires approveVariance and permission cash.variance.approve.
+- Transaction post override requires overrideCashControl=true + overrideReason and permission cash.override.post.
+- Most error responses are message + requestId (not typed code).
+- X-Request-Id header is also set by backend and should be used as fallback when body requestId is missing.
+
+Important transaction/form constraints to reflect in frontend:
+- VARIANCE transactions are system-generated; do not allow manual create.
+- TRANSFER_IN / TRANSFER_OUT require counterCashRegisterId.
+- DEPOSIT_TO_BANK / WITHDRAWAL_FROM_BANK require counterAccountId.
+- Backend field names are camelCase in request payloads (align frontend exactly).
+- Transaction currency must match register currency.
+- Register maxTxnAmount is enforced server-side; amount above limit is rejected.
+- Session-required registers reject transaction create/post without an OPEN session.
+- Cancel is allowed only for DRAFT/SUBMITTED; posted transactions cannot be cancelled.
+- Reverse is allowed only for POSTED original transactions; reversal rows cannot be reversed again.
+- Session close is blocked when DRAFT/SUBMITTED/APPROVED session transactions still exist.
+- Session close requires closeNote for FORCED_CLOSE and also when variance exceeds approval threshold.
+
+
+2) Frontend Wiring Constraint To Respect
+----------------------------------------
+
+Current App/Sidebar behavior hides unimplemented routes for non-preview admins.
+For cash placeholders to be visible to normal authorized users:
+- Sidebar entries must be treated as implemented (or explicitly routed in implementedRoutes).
+- Route guard must still enforce requiredPermissions.
+
+Recommended implementation choice for FE-PR-02 (simplest/safest):
+- Add cash placeholder pages as explicit implemented routes in App.jsx (using ModulePlaceholderPage).
+- Do not rely on preview-admin-only placeholder behavior for cash routes.
+
+Important route guard note:
+- Route permissions come from sidebar link config in current App routing.
+- Existing /app/tediye-islemleri and /app/tahsilat-islemleri should also have requiredPermissions set (cash.txn.read), otherwise future cash page routing there may bypass intended read guard.
+
+
+3) Revised FE PR Sequence
+-------------------------
+
+FE-PR-01: Cash API Client Foundation (No UI)
+Files:
+- frontend/src/api/cashAdmin.js
+
+Implement only backend-supported methods now:
+- Registers:
+  - listCashRegisters(params)
+  - getCashRegister(registerId, params)
+  - upsertCashRegister(payload)
+  - setCashRegisterStatus(registerId, payload)
+- Sessions:
+  - listCashSessions(params)
+  - getCashSession(sessionId, params)
+  - openCashSession(payload)
+  - closeCashSession(sessionId, payload)
+- Transactions:
+  - listCashTransactions(params)
+  - getCashTransaction(transactionId, params)
+  - createCashTransaction(payload)
+  - postCashTransaction(transactionId, payload)
+  - cancelCashTransaction(transactionId, payload)
+  - reverseCashTransaction(transactionId, payload)
+
+Guidelines:
+- Follow glAdmin.js/orgAdmin.js style.
+- Return response.data consistently.
+- Use query helper that skips undefined/null/empty values.
+- Do not add hardcoded role checks in API client.
+
+Do NOT add live methods yet for:
+- exceptions
+- rollout mode
+- balances/movements
+unless backend endpoint exists.
+
+Acceptance:
+- npm run lint passes
+- npm run build passes
+- no UI changes
+
+
+FE-PR-02: Routes + Sidebar + Permission Wiring (Placeholders)
+Files:
+- frontend/src/App.jsx
+- frontend/src/layouts/sidebarConfig.js
+- frontend/src/i18n/messages.js
+- frontend/src/pages/ModulePlaceholderPage.jsx (reuse)
+
+Routes to add:
+- /app/kasa-tanimlari
+- /app/kasa-oturumlari
+- /app/kasa-islemleri
+
+Route permission mapping (read-level):
+- /app/kasa-tanimlari -> cash.register.read
+- /app/kasa-oturumlari -> cash.register.read (session listing currently guarded by this)
+- /app/kasa-islemleri -> cash.txn.read
+
+Also set/confirm requiredPermissions on existing journal menu presets (for future cash transaction page):
+- /app/tediye-islemleri -> cash.txn.read
+- /app/tahsilat-islemleri -> cash.txn.read
+
+Critical:
+- Ensure placeholders are visible for authorized users (not only preview-admin).
+- Preferred approach: add explicit implemented routes in App.jsx using ModulePlaceholderPage.
+- Keep direct URL guard active via RequirePermission.
+
+Acceptance:
+- authorized users see sidebar items/placeholders
+- unauthorized users blocked from direct URL
+- npm run lint/build green
+
+
+FE-PR-03: Cash Registers Page
+Files:
+- frontend/src/pages/cash/CashRegistersPage.jsx
+- frontend/src/App.jsx
+- frontend/src/i18n/messages.js
+- frontend/src/api/cashAdmin.js
+
+Scope:
+- List + create/edit register via POST upsert
+- Activate/deactivate via POST /:registerId/status
+- Read-only mode if no upsert permission
+
+Field mapping (backend names):
+- code, name
+- registerType: VAULT | DRAWER | TILL
+- sessionMode: REQUIRED | OPTIONAL | NONE
+- legalEntityId, operatingUnitId
+- accountId
+- currencyCode
+- allowNegative
+- varianceGainAccountId, varianceLossAccountId
+- maxTxnAmount, requiresApprovalOverAmount
+
+Lookups:
+- legal entities/operating units from orgAdmin
+- accounts from glAdmin
+- currencies from orgAdmin (if needed)
+
+Acceptance:
+- list/create/update/status all working
+- backend validation errors surfaced
+- lint/build green
+
+
+FE-PR-04: Cash Sessions Page
+Files:
+- frontend/src/pages/cash/CashSessionsPage.jsx
+- frontend/src/App.jsx
+- frontend/src/i18n/messages.js
+- frontend/src/api/cashAdmin.js
+
+Scope:
+- list sessions + open/close actions
+- show current open session and history
+- show opening/counted/variance from session row
+- show expected when available (typically after close, from expected_closing_amount)
+- optional: derive live expected for OPEN session by summing posted session transactions in UI, or defer to BE-FE-04 summary endpoint
+- warn for REQUIRED mode with no open session
+- show backend-required close note scenarios clearly (FORCED_CLOSE and threshold variance)
+
+Close payload support (exact backend names):
+- countedClosingAmount (required)
+- closedReason
+- closeNote
+- approveVariance (for threshold flow)
+
+Permissions:
+- view: cash.register.read
+- open: cash.session.open
+- close: cash.session.close
+- approve over-threshold close: cash.variance.approve
+
+Acceptance:
+- open works; double-open errors shown
+- close works; close-without-count blocked
+- close with FORCED_CLOSE without closeNote is blocked and surfaced cleanly
+- close with over-threshold variance requires approveVariance path + permission
+- close is blocked while unposted session transactions exist
+- variance shown after close
+- expected amount is shown when available (no assumption of dedicated live expected endpoint)
+- lint/build green
+
+
+FE-PR-05: Cash Transactions Page (Core)
+Files:
+- frontend/src/pages/cash/CashTransactionsPage.jsx
+- frontend/src/App.jsx
+- frontend/src/i18n/messages.js
+- frontend/src/api/cashAdmin.js
+
+Scope:
+- reusable one-page transactions module
+- route presets:
+  - /app/tediye-islemleri -> PAYOUT
+  - /app/tahsilat-islemleri -> RECEIPT
+  - /app/kasa-islemleri -> ALL
+- list + filters + create + post + cancel + reverse
+
+Mandatory implementation details:
+- Generate and send idempotencyKey on create.
+- Hide VARIANCE from manual create txnType options.
+- Apply txn-type-specific required fields in UI:
+  - TRANSFER_IN / TRANSFER_OUT -> require counterCashRegisterId
+  - DEPOSIT_TO_BANK / WITHDRAWAL_FROM_BANK -> require counterAccountId
+- Clear incompatible dependent fields when txnType changes (avoid stale invalid payloads).
+- Respect backend status machine: cancel only pre-post, reverse only posted originals, posted rows immutable.
+- Respect session/register constraints in UX messaging: inactive register, session required, currency mismatch, max amount.
+- Handle idempotentReplay=true from create/post/reverse responses with a non-error informational message
+  (example: "This request was already processed; existing transaction returned.").
+
+Create payload (backend-aligned fields):
+- registerId
+- cashSessionId (optional, when applicable)
+- txnType
+- txnDatetime
+- bookDate
+- amount
+- currencyCode
+- description
+- referenceNo
+- sourceDocType
+- sourceDocId
+- counterpartyType
+- counterpartyId
+- counterAccountId
+- counterCashRegisterId
+- idempotencyKey (required)
+
+Action payloads:
+- post:
+  - overrideCashControl
+  - overrideReason
+- cancel:
+  - cancelReason
+- reverse:
+  - reverseReason
+
+Permissions:
+- view: cash.txn.read
+- create: cash.txn.create
+- cancel: cash.txn.cancel
+- post: cash.txn.post
+- reverse: cash.txn.reverse
+- override post: cash.override.post
+
+Acceptance:
+- create/post/cancel/reverse state flow works
+- posted rows read-only in UI
+- preset routes work
+- lint/build green
+
+
+FE-PR-06: Error Mapping + Override UX + Audit Visibility
+Files:
+- frontend/src/pages/cash/CashTransactionsPage.jsx
+- frontend/src/pages/cash/CashSessionsPage.jsx
+- frontend/src/i18n/messages.js
+
+Important backend note:
+- No stable error code contract yet; map by message patterns + fallback generic.
+- Keep unknown errors visible with requestId where possible (body requestId or X-Request-Id header fallback).
+- RequestId source priority for Axios error handling:
+  - error.response?.data?.requestId
+  - error.response?.headers?.['x-request-id']   (Axios lowercases header keys)
+  - null
+
+Scope:
+- user-friendly mapping for known backend messages
+- override controls only for authorized users
+- always show requestId in error details (toast/detail area) when available
+- audit fields display where returned:
+  - postedJournalEntryId / posted_journal_entry_id
+  - overrideReason / override_reason
+  - closedReason / closed_reason
+  - approvedByUserId / approved_by_user_id
+  - approvedAt / approved_at
+  - varianceAmount / variance_amount
+
+Acceptance:
+- no silent failures
+- unknown errors still show fallback + requestId
+- override reason enforced in UI before submit
+- lint/build green
+
+
+FE-PR-07: Rollout Mode Awareness (Depends On Backend Endpoint)
+Files:
+- frontend/src/pages/cash/*.jsx
+- frontend/src/i18n/messages.js
+- frontend/src/api/cashAdmin.js
+
+Dependency gate (required first):
+- Add backend endpoint exposing cash control mode.
+  Suggested:
+  - GET /api/v1/cash/config
+  - response: { cashControlMode: "OFF" | "WARN" | "ENFORCE" }
+
+Then implement:
+- banner/info block on cash pages
+- safe fallback when endpoint missing
+
+Acceptance:
+- banner shown when mode available
+- no crash when mode absent
+- lint/build green
+
+
+FE-PR-08: Exceptions Page (Two-Step)
+Files:
+- frontend/src/pages/cash/CashExceptionsPage.jsx
+- frontend/src/App.jsx
+- frontend/src/layouts/sidebarConfig.js
+- frontend/src/i18n/messages.js
+- frontend/src/api/cashAdmin.js
+
+Route permission (recommended):
+- /app/kasa-istisnalari -> cash.report.read
+
+FE-PR-08A (no new backend):
+- derive basic exceptions from existing session/transaction lists:
+  - high variance (session varianceAmount / variance_amount)
+  - forced close (session closedReason / closed_reason)
+  - override usage (transaction overrideReason / override_reason)
+  - unposted txns (status in DRAFT/SUBMITTED/APPROVED)
+- direct GL warning hits are not available from cash endpoints today.
+- direct GL warning hits are also not available from current /api/v1/rbac/audit-logs, because that endpoint reads rbac_audit_logs while cash-control warn/override events are written to audit_logs.
+
+FE-PR-08B (recommended backend endpoint):
+- add dedicated exceptions API for scalable filtering/aggregation:
+  - GET /api/v1/cash/exceptions
+  - optional filters: date range, registerId, legalEntityId, operatingUnitId, type
+- backend can aggregate both cash exceptions and direct GL cash-control warning events
+
+Acceptance:
+- supervisor/finance view works
+- operator-only users blocked by permission
+- empty/partial states handled
+- lint/build green
+
+
+4) Backend Additions Recommended Before/Alongside FE
+----------------------------------------------------
+
+BE-FE-01 (recommended before FE-PR-06):
+- Add structured error code to cash-related 4xx responses.
+- Keep message for human readability.
+- Include requestId as today (and keep X-Request-Id response header).
+
+BE-FE-02 (required for FE-PR-07):
+- Expose rollout mode endpoint for frontend read.
+  Suggested:
+  - GET /api/v1/cash/config
+  - response: { cashControlMode: "OFF" | "WARN" | "ENFORCE" }
+
+BE-FE-03 (recommended for FE-PR-08B):
+- Add cash exceptions endpoint (aggregated view).
+- Prefer including direct GL cash-control warn/override events in same response for one-page monitoring.
+
+BE-FE-04 (optional, performance):
+- Add summary endpoint(s) for balances/movements if dashboard cards are needed.
+
+BE-FE-05 (optional alternative to BE-FE-03 for GL warning visibility):
+- Expose read endpoint for audit_logs entries relevant to cash-control events
+  (gl.cash_control.warn / gl.cash_control.override), or include these events in BE-FE-03 response.
+
+
+5) Definition Of Ready For Frontend Start
+-----------------------------------------
+
+Ready now:
+- FE-PR-01
+- FE-PR-02
+- FE-PR-03
+- FE-PR-04
+- FE-PR-05
+- FE-PR-06 (message-based mapping)
+
+Blocked/dependent:
+- FE-PR-07 until BE-FE-02
+- FE-PR-08 full version until BE-FE-03 (or BE-FE-05 alternative)
+- FE-PR-08A can start now, but direct GL warning hits remain unavailable without BE-FE-03/05
